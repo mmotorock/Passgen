@@ -1,0 +1,21 @@
+[package]
+name = "Passgen"
+version = "2.1.0"
+edition = "2021"
+build = "build.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+eframe = "0.27.2"
+egui = "0.27.2"
+rand = "0.8.5"
+dirs = "5.0.1"
+clap = { version = "4.5.4", features = ["derive"] }
+arboard = "3.4.0"
+image = { version = "0.25.1", default-features = false, features = ["ico"] }
+rfd = "0.14.1" # For native file dialogs
+
+
+[build-dependencies]
+embed-resource = "2.4"
