@@ -16,16 +16,7 @@ pub fn generate_char_password(
     use_numbers: bool,
     use_special: bool,
 ) -> Result<String, String> {
-    let selected_sets: Vec<Vec<char>> = [
-        (use_lowercase, &sets.lowercase),
-        (use_uppercase, &sets.uppercase),
-        (use_numbers, &sets.numbers),
-        (use_special, &sets.special),
-    ]
-    .into_iter()
-    .filter(|(enabled, set)| *enabled && !set.is_empty())
-    .map(|(_, set)| set.chars().collect())
-    .collect();
+    let selected_sets = selected_sets(sets, use_lowercase, use_uppercase, use_numbers, use_special);
 
     if selected_sets.is_empty() {
         return Err("You must select at least one character set.".to_string());
@@ -37,10 +28,7 @@ pub fn generate_char_password(
         ));
     }
 
-    // Deduplicate so every distinct character is equally likely, even if sets overlap.
-    let mut pool: Vec<char> = selected_sets.concat();
-    pool.sort_unstable();
-    pool.dedup();
+    let pool = character_pool(&selected_sets);
     let max_repeats = max_repeats_for(length, pool.len());
 
     let mut rng = thread_rng();
@@ -57,6 +45,112 @@ pub fn generate_char_password(
     }
 
     Err("Failed to generate a valid password after multiple attempts. Try adding more characters to the sets.".to_string())
+}
+
+/// Estimates the strength of a character password, in bits of randomness.
+/// The first character can be any in the pool; each later one any except the previous character.
+pub fn char_entropy_bits(
+    length: usize,
+    sets: &CharacterSets,
+    use_lowercase: bool,
+    use_uppercase: bool,
+    use_numbers: bool,
+    use_special: bool,
+) -> f64 {
+    let selected = selected_sets(sets, use_lowercase, use_uppercase, use_numbers, use_special);
+    let pool_size = character_pool(&selected).len() as f64;
+    if length == 0 || pool_size < 2.0 {
+        return 0.0;
+    }
+    pool_size.log2() + (length - 1) as f64 * (pool_size - 1.0).log2()
+}
+
+/// Estimates the strength of a passphrase, in bits of randomness.
+pub fn word_entropy_bits(count: usize, wordlist_size: usize) -> f64 {
+    if wordlist_size < 2 {
+        return 0.0;
+    }
+    count as f64 * (wordlist_size as f64).log2()
+}
+
+/// Guesses per second assumed for an attacker: a GPU cracking rig working on
+/// a leaked database of fast password hashes. A deliberately pessimistic figure.
+pub const GUESSES_PER_SECOND: f64 = 1e11;
+
+/// Seconds an attacker needs on average to guess a password of the given strength
+/// (half of all possibilities), at `GUESSES_PER_SECOND`.
+pub fn crack_time_seconds(bits: f64) -> f64 {
+    2f64.powf(bits - 1.0) / GUESSES_PER_SECOND
+}
+
+/// Describes a crack time in plain words, e.g. "about 3 hours" or "about 24 thousand years".
+pub fn describe_crack_time(seconds: f64) -> String {
+    const MINUTE: f64 = 60.0;
+    const HOUR: f64 = 60.0 * MINUTE;
+    const DAY: f64 = 24.0 * HOUR;
+    const YEAR: f64 = 365.25 * DAY;
+    const AGE_OF_UNIVERSE_YEARS: f64 = 1.38e10;
+
+    let plural = |value: f64, unit: &str| {
+        let rounded = value.round() as u64;
+        format!("about {} {}{}", rounded, unit, if rounded == 1 { "" } else { "s" })
+    };
+
+    if seconds < 1.0 {
+        return "less than a second".to_string();
+    }
+    if seconds < MINUTE {
+        return plural(seconds, "second");
+    }
+    if seconds < HOUR {
+        return plural(seconds / MINUTE, "minute");
+    }
+    if seconds < DAY {
+        return plural(seconds / HOUR, "hour");
+    }
+    if seconds < YEAR {
+        return plural(seconds / DAY, "day");
+    }
+
+    let years = seconds / YEAR;
+    if years >= AGE_OF_UNIVERSE_YEARS {
+        return "longer than the age of the universe".to_string();
+    }
+    for (scale, name) in [(1e9, "billion"), (1e6, "million"), (1e3, "thousand")] {
+        if years >= scale {
+            return format!("about {} {} years", (years / scale).round() as u64, name);
+        }
+    }
+    plural(years, "year")
+}
+
+/// The enabled, non-empty character sets.
+fn selected_sets(
+    sets: &CharacterSets,
+    use_lowercase: bool,
+    use_uppercase: bool,
+    use_numbers: bool,
+    use_special: bool,
+) -> Vec<Vec<char>> {
+    [
+        (use_lowercase, &sets.lowercase),
+        (use_uppercase, &sets.uppercase),
+        (use_numbers, &sets.numbers),
+        (use_special, &sets.special),
+    ]
+    .into_iter()
+    .filter(|(enabled, set)| *enabled && !set.is_empty())
+    .map(|(_, set)| set.chars().collect())
+    .collect()
+}
+
+/// All distinct characters across the selected sets.
+/// Deduplicated so every character is equally likely, even if sets overlap.
+fn character_pool(selected_sets: &[Vec<char>]) -> Vec<char> {
+    let mut pool = selected_sets.concat();
+    pool.sort_unstable();
+    pool.dedup();
+    pool
 }
 
 /// The most times a single character may appear. Short passwords keep the limit of 3;
@@ -199,6 +293,38 @@ mod tests {
         let sets = CharacterSets { numbers: "01".to_string(), ..CharacterSets::default() };
         let password = generate_char_password(40, &sets, false, false, true, false).unwrap();
         assert_eq!(password.len(), 40);
+    }
+
+    #[test]
+    fn estimates_strength() {
+        let sets = CharacterSets::default();
+        let bits = char_entropy_bits(16, &sets, true, true, true, true);
+        assert!((bits - (88f64.log2() + 15.0 * 87f64.log2())).abs() < 1e-9);
+        assert_eq!(char_entropy_bits(16, &sets, false, false, false, false), 0.0);
+        assert!((word_entropy_bits(4, 7776) - 4.0 * 7776f64.log2()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn crack_time_follows_character_variety() {
+        let sets = CharacterSets::default();
+        let time = |lower, upper, numbers, special| {
+            crack_time_seconds(char_entropy_bits(12, &sets, lower, upper, numbers, special))
+        };
+        let numbers_only = time(false, false, true, false);
+        let lowercase_only = time(true, false, false, false);
+        let mixed_case = time(true, true, false, false);
+        let everything = time(true, true, true, true);
+        assert!(numbers_only < 60.0, "12 digits should fall within a minute");
+        assert!(numbers_only < lowercase_only && lowercase_only < mixed_case && mixed_case < everything);
+    }
+
+    #[test]
+    fn describes_crack_times() {
+        assert_eq!(describe_crack_time(0.2), "less than a second");
+        assert_eq!(describe_crack_time(1.0), "about 1 second");
+        assert_eq!(describe_crack_time(3.0 * 3600.0), "about 3 hours");
+        assert_eq!(describe_crack_time(24_000.0 * 365.25 * 86400.0), "about 24 thousand years");
+        assert_eq!(describe_crack_time(1e30), "longer than the age of the universe");
     }
 
     #[test]

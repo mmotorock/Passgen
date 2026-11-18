@@ -2,6 +2,7 @@ use crate::app::history::History;
 use clap::Parser;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Instant;
 
 /// Defines the color scheme for the UI.
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -86,13 +87,13 @@ pub struct PassGenApp {
     pub status_message: String,
     pub config_path: PathBuf,
     pub saved_config_state: String,
-    pub show_exit_confirmation: bool,
-    pub force_close: bool,
     pub show_settings_window: bool,
     pub error_message: Option<String>, // For the error dialog
+    pub clipboard_clear_at: Option<(Instant, String)>, // When to clear the clipboard, and what we copied
 
     // Settings
     pub theme: Theme,
+    pub default_tab: Tab,
     pub words_file_path_str: String,
 
     // Character generator state
@@ -104,11 +105,13 @@ pub struct PassGenApp {
     pub char_length: usize,
     pub char_length_input: String, // Text in the length box while it is being edited
     pub char_password_output: String,
+    pub char_strength_bits: Option<f64>,
 
     // Word generator state
     pub words: Vec<String>,
     pub word_count: usize,
     pub word_password_output: String,
+    pub word_strength_bits: Option<f64>,
     pub words_file_path: PathBuf,
     pub use_separator: bool,
     pub separator_char: String,
@@ -127,11 +130,11 @@ impl Default for PassGenApp {
             status_message: "Default settings loaded.".to_string(),
             config_path: PathBuf::new(),
             saved_config_state: String::new(),
-            show_exit_confirmation: false,
-            force_close: false,
             show_settings_window: false,
             error_message: None,
+            clipboard_clear_at: None,
             theme: Theme::Dark,
+            default_tab: Tab::Character,
             words_file_path_str: String::new(),
             char_sets: CharacterSets::default(),
             use_lowercase: true,
@@ -141,9 +144,11 @@ impl Default for PassGenApp {
             char_length: 16,
             char_length_input: String::new(),
             char_password_output: String::new(),
+            char_strength_bits: None,
             words: Vec::new(),
             word_count: 3,
             word_password_output: String::new(),
+            word_strength_bits: None,
             words_file_path: PathBuf::new(),
             use_separator: true,
             separator_char: "-".to_string(),

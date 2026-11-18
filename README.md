@@ -19,8 +19,14 @@ Passgen is a versatile, secure password and passphrase generator built with Rust
     -   The last 5 generated passwords (GUI and CLI) are listed at the bottom of the window, hidden until you tick "Show", each with a Copy button.
     -   The history is stored encrypted (ChaCha20-Poly1305) in `history.dat`. The key is kept in the operating system's keyring (Windows Credential Manager, GNOME Keyring/KWallet on Linux, Keychain on macOS), so the file alone is useless to anyone who copies it.
     -   If no keyring is available, the history is kept for the current session only.
+-   **Quick to Use:**
+    -   A password is ready as soon as the app opens.
+    -   Generating a password copies it to the clipboard automatically. The clipboard is cleared after 2 minutes (only if it still holds that password).
+    -   Keyboard shortcuts: `Space` generates a new password, `Ctrl+C` copies the one on screen.
+    -   Shows an estimated time to crack each password, assuming an attacker making 100 billion guesses per second.
 -   **Full Configuration:**
-    -   All settings are saved to a `config.toml` file.
+    -   All settings are saved automatically to a `config.toml` file as you change them.
+    -   Choose which tab (Characters or Words) the app opens on.
     -   Custom wordlists can be used by changing the path in the settings.
     -   Supports both Light and Dark themes.
 -   **Cross-Platform:** Built with Rust, it compiles to a single, native executable.

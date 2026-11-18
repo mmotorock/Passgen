@@ -24,8 +24,9 @@ impl PassGenApp {
         let (history, history_status) = History::load(app_dir.join("history.dat"));
         app.history = history;
 
-        app.status_message = [default_words_status, config_status, word_status, history_status]
+        app.status_message = [Some(default_words_status), Some(config_status), Some(word_status), history_status]
             .into_iter()
+            .flatten()
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join("\n");
@@ -38,7 +39,7 @@ impl PassGenApp {
         format!(
             "theme={:?}\n\
              words_file_path={}\n\
-             active_tab={:?}\n\
+             default_tab={:?}\n\
              use_lowercase={}\n\
              use_uppercase={}\n\
              use_numbers={}\n\
@@ -54,7 +55,7 @@ impl PassGenApp {
              use_uppercase_words={}\n",
             self.theme,
             self.words_file_path.to_string_lossy(),
-            self.active_tab,
+            self.default_tab,
             self.use_lowercase,
             self.use_uppercase,
             self.use_numbers,
@@ -71,14 +72,11 @@ impl PassGenApp {
         )
     }
 
-    pub fn save_config(&mut self) -> String {
-        self.words_file_path = PathBuf::from(&self.words_file_path_str);
+    /// Writes the current settings to config.toml. Called automatically whenever a setting changes.
+    pub fn save_config(&mut self) -> Result<(), String> {
         let content = self.get_current_config_as_string();
         self.saved_config_state = content.clone();
-        match fs::write(&self.config_path, content) {
-            Ok(_) => "Configuration saved to config.toml".to_string(),
-            Err(e) => format!("Error saving config.toml: {}", e),
-        }
+        fs::write(&self.config_path, content).map_err(|e| format!("Error saving config.toml: {}", e))
     }
 
     pub fn load_config_from_path(&mut self, path: &PathBuf) -> String {
@@ -87,7 +85,10 @@ impl PassGenApp {
             return if path == &self.config_path {
                 self.words_file_path = get_config_directory().join("words.txt");
                 self.words_file_path_str = self.words_file_path.to_string_lossy().to_string();
-                self.save_config()
+                match self.save_config() {
+                    Ok(()) => "Created config.toml with default settings".to_string(),
+                    Err(e) => e,
+                }
             } else {
                 format!("Error: Failed to load or parse config from {:?}", path)
             };
@@ -99,7 +100,8 @@ impl PassGenApp {
         self.words_file_path = config.get("words_file_path").map(PathBuf::from).unwrap_or(default_words_path);
         self.words_file_path_str = self.words_file_path.to_string_lossy().to_string();
 
-        self.active_tab = config.get("active_tab").and_then(|s| s.parse().ok()).unwrap_or(Tab::Character);
+        self.default_tab = config.get("default_tab").and_then(|s| s.parse().ok()).unwrap_or(Tab::Character);
+        self.active_tab = self.default_tab;
         self.use_lowercase = config.get("use_lowercase").and_then(|s| s.parse().ok()).unwrap_or(true);
         self.use_uppercase = config.get("use_uppercase").and_then(|s| s.parse().ok()).unwrap_or(true);
         self.use_numbers = config.get("use_numbers").and_then(|s| s.parse().ok()).unwrap_or(true);

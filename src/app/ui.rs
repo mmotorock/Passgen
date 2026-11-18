@@ -1,16 +1,21 @@
-use crate::app::password::{generate_char_password, generate_word_password};
+use crate::app::password::{
+    char_entropy_bits, crack_time_seconds, describe_crack_time, generate_char_password, generate_word_password,
+    word_entropy_bits, GUESSES_PER_SECOND,
+};
 use crate::app::state::{PassGenApp, Tab, Theme};
 use crate::app::history::MAX_ENTRIES;
 use crate::app::utils::{load_icon, load_words_from_file};
 use eframe::{egui, NativeOptions};
 use rfd::FileDialog;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 const PADDING: f32 = 10.0;
 const MIN_LENGTH: usize = 12;
 const MAX_LENGTH: usize = 256;
 const LENGTH_BOX_WIDTH: f32 = 40.0;
 const COPY_BUTTON_SIZE: egui::Vec2 = egui::vec2(26.0, 22.0);
+const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(120);
 
 impl eframe::App for PassGenApp {
     /// Called each frame to draw the GUI.
@@ -21,30 +26,20 @@ impl eframe::App for PassGenApp {
             Theme::Dark => egui::Visuals::dark(),
         });
 
-        // --- Handle Close Request ---
-        if ctx.input(|i| i.viewport().close_requested()) {
-            if self.get_current_config_as_string() != self.saved_config_state && !self.force_close {
-                self.show_exit_confirmation = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            }
-        }
+        // Handled before any widget so Space doesn't also press a focused button.
+        self.handle_shortcuts(ctx);
 
         // --- Top Menu Bar ---
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
-                ui.menu_button("Config", |ui| {
-                    if ui.button("Save Configuration").clicked() {
-                        self.status_message = self.save_config();
+                ui.menu_button("Settings", |ui| {
+                    if ui.button("Open Settings").clicked() {
+                        self.show_settings_window = true;
                         ui.close_menu();
                     }
-                    if ui.button("Reload Configuration").clicked() {
-                        let path = self.config_path.clone();
-                        self.status_message = self.load_config_from_path(&path);
-                        ui.close_menu();
-                    }
-                    if ui.button("Load Defaults").clicked() {
+                    if ui.button("Restore Defaults").clicked() {
                         let defaults = Self::default();
-                        self.active_tab = defaults.active_tab;
+                        self.default_tab = defaults.default_tab;
                         self.char_sets = defaults.char_sets;
                         self.use_lowercase = defaults.use_lowercase;
                         self.use_uppercase = defaults.use_uppercase;
@@ -55,13 +50,7 @@ impl eframe::App for PassGenApp {
                         self.use_separator = defaults.use_separator;
                         self.separator_char = defaults.separator_char;
                         self.use_uppercase_words = defaults.use_uppercase_words;
-                        self.status_message = "Defaults loaded. Save to make permanent.".to_string();
-                        ui.close_menu();
-                    }
-                });
-                ui.menu_button("Settings", |ui| {
-                    if ui.button("Open Settings").clicked() {
-                        self.show_settings_window = true;
+                        self.status_message = "Default settings restored.".to_string();
                         ui.close_menu();
                     }
                 });
@@ -96,8 +85,15 @@ impl eframe::App for PassGenApp {
 
         // --- Draw Windows ---
         self.draw_settings_window(ctx);
-        self.draw_exit_confirmation_window(ctx);
         self.draw_error_dialog(ctx);
+
+        // Settings are saved as soon as they change, so there is nothing to confirm on exit.
+        if self.get_current_config_as_string() != self.saved_config_state {
+            if let Err(e) = self.save_config() {
+                self.status_message = e;
+            }
+        }
+        self.clear_clipboard_when_due(ctx);
     }
 }
 
@@ -163,21 +159,9 @@ impl PassGenApp {
 
         ui.add_space(PADDING);
 
-        if ui.add_sized([ui.available_width(), 40.0], egui::Button::new("Generate Password")).clicked() {
-            match generate_char_password(
-                self.char_length,
-                &self.char_sets,
-                self.use_lowercase,
-                self.use_uppercase,
-                self.use_numbers,
-                self.use_special,
-            ) {
-                Ok(password) => {
-                    self.status_message = self.history.add(&password);
-                    self.char_password_output = password;
-                }
-                Err(e) => self.error_message = Some(e),
-            }
+        let generate = egui::Button::new("Generate Password");
+        if ui.add_sized([ui.available_width(), 40.0], generate).on_hover_text("Shortcut: Space").clicked() {
+            self.generate_and_copy(ui.ctx());
         }
 
         ui.add_space(PADDING);
@@ -191,13 +175,11 @@ impl PassGenApp {
                     .font(egui::FontId::monospace(20.0))
                     .desired_width(ui.available_width() - 60.0),
             );
-            if ui.add(copy_button()).clicked() {
-                if !self.char_password_output.is_empty() {
-                    ui.output_mut(|o| o.copied_text = self.char_password_output.clone());
-                    self.status_message = "Password copied to clipboard!".to_string();
-                }
+            if ui.add(copy_button()).on_hover_text("Shortcut: Ctrl+C").clicked() {
+                self.copy_output(ui.ctx());
             }
         });
+        draw_strength(ui, self.char_strength_bits);
     }
 
     /// Draws the UI for the "Words" tab.
@@ -229,20 +211,9 @@ impl PassGenApp {
 
         ui.add_space(PADDING);
 
-        if ui.add_sized([ui.available_width(), 40.0], egui::Button::new("Generate Passphrase")).clicked() {
-            match generate_word_password(
-                self.word_count,
-                &self.words,
-                self.use_separator,
-                &self.separator_char,
-                self.use_uppercase_words,
-            ) {
-                Ok(password) => {
-                    self.status_message = self.history.add(&password);
-                    self.word_password_output = password;
-                }
-                Err(e) => self.error_message = Some(e),
-            }
+        let generate = egui::Button::new("Generate Passphrase");
+        if ui.add_sized([ui.available_width(), 40.0], generate).on_hover_text("Shortcut: Space").clicked() {
+            self.generate_and_copy(ui.ctx());
         }
 
         ui.add_space(PADDING);
@@ -256,13 +227,11 @@ impl PassGenApp {
                     .font(egui::FontId::monospace(20.0))
                     .desired_width(ui.available_width() - 60.0),
             );
-            if ui.add(copy_button()).clicked() {
-                if !self.word_password_output.is_empty() {
-                    ui.output_mut(|o| o.copied_text = self.word_password_output.clone());
-                    self.status_message = "Passphrase copied to clipboard!".to_string();
-                }
+            if ui.add(copy_button()).on_hover_text("Shortcut: Ctrl+C").clicked() {
+                self.copy_output(ui.ctx());
             }
         });
+        draw_strength(ui, self.word_strength_bits);
     }
 
     /// Draws the list of recently generated passwords.
@@ -317,8 +286,7 @@ impl PassGenApp {
             }
         }
         if let Some(password) = copied {
-            ui.output_mut(|o| o.copied_text = password);
-            self.status_message = "Password from history copied to clipboard!".to_string();
+            self.copy_to_clipboard(ui.ctx(), password);
         }
         ui.add_space(PADDING / 2.0);
     }
@@ -336,6 +304,17 @@ impl PassGenApp {
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut self.theme, Theme::Light, "Light");
                     ui.radio_value(&mut self.theme, Theme::Dark, "Dark");
+                });
+
+                ui.add_space(PADDING);
+                ui.separator();
+                ui.add_space(PADDING);
+
+                ui.heading("Startup");
+                ui.label("Default tab:");
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut self.default_tab, Tab::Character, "Characters");
+                    ui.radio_value(&mut self.default_tab, Tab::Word, "Words");
                 });
 
                 ui.add_space(PADDING);
@@ -368,34 +347,6 @@ impl PassGenApp {
             });
     }
 
-    /// Draws the exit confirmation dialog when needed.
-    fn draw_exit_confirmation_window(&mut self, ctx: &egui::Context) {
-        if self.show_exit_confirmation {
-            egui::Window::new("Unsaved Changes")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-                .show(ctx, |ui| {
-                    ui.label("You have unsaved configuration changes. Would you like to save them?");
-                    ui.add_space(PADDING);
-                    ui.horizontal(|ui| {
-                        if ui.button("Yes").clicked() {
-                            self.save_config();
-                            self.force_close = true;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                        if ui.button("No").clicked() {
-                            self.force_close = true;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                        if ui.button("Cancel").clicked() {
-                            self.show_exit_confirmation = false;
-                        }
-                    });
-                });
-        }
-    }
-
     /// Draws the error dialog when an error message is present.
     fn draw_error_dialog(&mut self, ctx: &egui::Context) {
         if let Some(error) = &self.error_message.clone() {
@@ -424,6 +375,152 @@ impl PassGenApp {
     }
 }
 
+impl PassGenApp {
+    /// Generates passwords for both tabs so one is ready as soon as the window opens.
+    /// Errors are ignored here; they are shown when the user presses Generate.
+    fn generate_on_startup(&mut self) {
+        let _ = self.generate(Tab::Character);
+        let _ = self.generate(Tab::Word);
+    }
+
+    /// Generates a new password for `tab` and shows it, without copying it.
+    fn generate(&mut self, tab: Tab) -> Result<(), String> {
+        match tab {
+            Tab::Character => {
+                self.char_password_output = generate_char_password(
+                    self.char_length,
+                    &self.char_sets,
+                    self.use_lowercase,
+                    self.use_uppercase,
+                    self.use_numbers,
+                    self.use_special,
+                )?;
+                self.char_strength_bits = Some(char_entropy_bits(
+                    self.char_length,
+                    &self.char_sets,
+                    self.use_lowercase,
+                    self.use_uppercase,
+                    self.use_numbers,
+                    self.use_special,
+                ));
+            }
+            Tab::Word => {
+                self.word_password_output = generate_word_password(
+                    self.word_count,
+                    &self.words,
+                    self.use_separator,
+                    &self.separator_char,
+                    self.use_uppercase_words,
+                )?;
+                self.word_strength_bits = Some(word_entropy_bits(self.word_count, self.words.len()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Generates a new password for the active tab and copies it.
+    fn generate_and_copy(&mut self, ctx: &egui::Context) {
+        match self.generate(self.active_tab) {
+            Ok(()) => self.copy_output(ctx),
+            Err(e) => self.error_message = Some(e),
+        }
+    }
+
+    /// Copies the password shown on the active tab and records it in the history.
+    fn copy_output(&mut self, ctx: &egui::Context) {
+        let password = match self.active_tab {
+            Tab::Character => self.char_password_output.clone(),
+            Tab::Word => self.word_password_output.clone(),
+        };
+        if password.is_empty() {
+            return;
+        }
+        let history_result = self.history.add(&password);
+        self.copy_to_clipboard(ctx, password);
+        if let Err(e) = history_result {
+            self.status_message = format!("Copied, but saving history failed: {}", e);
+        }
+    }
+
+    /// Puts `text` on the clipboard and schedules it to be cleared.
+    fn copy_to_clipboard(&mut self, ctx: &egui::Context, text: String) {
+        ctx.output_mut(|o| o.copied_text = text.clone());
+        self.clipboard_clear_at = Some((Instant::now() + CLIPBOARD_CLEAR_AFTER, text));
+        self.status_message = format!(
+            "Copied to clipboard. It will be cleared in {} minutes.",
+            CLIPBOARD_CLEAR_AFTER.as_secs() / 60
+        );
+    }
+
+    /// Clears the clipboard once the timer runs out, unless something else was copied since.
+    fn clear_clipboard_when_due(&mut self, ctx: &egui::Context) {
+        let Some((due, copied)) = &self.clipboard_clear_at else {
+            return;
+        };
+        let now = Instant::now();
+        if now < *due {
+            ctx.request_repaint_after(*due - now);
+            return;
+        }
+
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            if clipboard.get_text().is_ok_and(|current| &current == copied) {
+                self.status_message = match clipboard.clear() {
+                    Ok(()) => "Clipboard cleared.".to_string(),
+                    Err(e) => format!("Could not clear the clipboard: {}", e),
+                };
+            }
+        }
+        self.clipboard_clear_at = None;
+    }
+
+    /// Space generates a new password and Ctrl+C copies the current one,
+    /// except while typing in a text field, with selected text, or when the error dialog is open.
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.wants_keyboard_input() || self.error_message.is_some() {
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
+            self.generate_and_copy(ctx);
+            return;
+        }
+        let copy_pressed = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)));
+        let has_selection = egui::text_selection::LabelSelectionState::load(ctx).has_selection();
+        if copy_pressed && !has_selection {
+            self.copy_output(ctx);
+        }
+    }
+}
+
+/// Shows roughly how long the displayed password would take to crack, colored by how safe that is.
+fn draw_strength(ui: &mut egui::Ui, bits: Option<f64>) {
+    let Some(bits) = bits else {
+        return;
+    };
+    const DAY: f64 = 86_400.0;
+    const YEAR: f64 = 365.25 * DAY;
+
+    let seconds = crack_time_seconds(bits);
+    let color = match seconds {
+        s if s < DAY => egui::Color32::from_rgb(220, 80, 80),
+        s if s < 1_000.0 * YEAR => egui::Color32::from_rgb(230, 160, 50),
+        s if s < 1e9 * YEAR => egui::Color32::from_rgb(140, 190, 70),
+        _ => egui::Color32::from_rgb(60, 170, 90),
+    };
+
+    ui.add_space(PADDING / 2.0);
+    ui.horizontal(|ui| {
+        ui.label("Time to crack:");
+        ui.label(egui::RichText::new(describe_crack_time(seconds)).color(color).strong());
+    })
+    .response
+    .on_hover_text(format!(
+        "Average time for an attacker making {} billion guesses per second \
+         (a GPU cracking rig working on a leaked password database).",
+        GUESSES_PER_SECOND / 1e9
+    ));
+}
+
 /// A button showing a "copy" icon: two overlapping pages.
 fn copy_button() -> impl egui::Widget {
     |ui: &mut egui::Ui| {
@@ -449,7 +546,7 @@ pub fn run_gui_mode() {
     let icon = load_icon();
     let options = NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([540.0, 680.0])
+            .with_inner_size([540.0, 720.0])
             .with_min_inner_size([480.0, 600.0])
             .with_icon(icon.clone()),
         ..Default::default()
@@ -457,7 +554,11 @@ pub fn run_gui_mode() {
     eframe::run_native(
         "Password generator",
         options,
-        Box::new(|_cc| Box::new(PassGenApp::new())),
+        Box::new(|_cc| {
+            let mut app = PassGenApp::new();
+            app.generate_on_startup();
+            Box::new(app)
+        }),
     )
         .expect("Failed to run eframe");
 }

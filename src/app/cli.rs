@@ -60,12 +60,11 @@ pub fn run_word_cli_mode(count: usize) {
 
 /// Adds a CLI-generated password to the shared history, reporting problems on stderr.
 fn remember(password: &str) {
-    let (mut history, status) = History::load(get_config_directory().join("history.dat"));
-    if !status.is_empty() && !status.starts_with("Loaded") {
-        eprintln!("{}", status);
+    let (mut history, warning) = History::load(get_config_directory().join("history.dat"));
+    if let Some(warning) = warning {
+        eprintln!("{}", warning);
     }
-    let status = history.add(password);
-    if !status.ends_with("added to history.") {
-        eprintln!("{}", status);
+    if let Err(e) = history.add(password) {
+        eprintln!("Saving history failed: {}", e);
     }
 }

@@ -31,29 +31,31 @@ pub struct History {
 }
 
 impl History {
-    /// Loads the history from `path`, returning it along with a status message.
+    /// Loads the history from `path`, returning it along with a warning if something went wrong.
     /// If the keyring is unavailable, the history works for this session only.
-    pub fn load(path: PathBuf) -> (Self, String) {
+    pub fn load(path: PathBuf) -> (Self, Option<String>) {
         let cipher = match load_or_create_key() {
             Ok(key) => ChaCha20Poly1305::new(&key),
             Err(e) => {
                 let history = Self { path, ..Default::default() };
-                return (history, format!("Keyring unavailable, history will not be saved: {}", e));
+                return (history, Some(format!("Keyring unavailable, history will not be saved: {}", e)));
             }
         };
 
         let mut history = Self { entries: Vec::new(), path, cipher: Some(cipher) };
-        let status = match history.read_file() {
-            Ok(0) => String::new(),
-            Ok(count) => format!("Loaded {} passwords from history", count),
-            Err(e) => format!("Could not read history, starting fresh: {}", e),
-        };
-        (history, status)
+        let warning = history
+            .read_file()
+            .err()
+            .map(|e| format!("Could not read history, starting fresh: {}", e));
+        (history, warning)
     }
 
     /// Adds a password to the front of the history and saves it.
-    /// Returns a status message for the status bar.
-    pub fn add(&mut self, password: &str) -> String {
+    /// A password that is already in the history is not added again.
+    pub fn add(&mut self, password: &str) -> Result<(), String> {
+        if self.entries.iter().any(|entry| entry.password == password) {
+            return Ok(());
+        }
         self.entries.insert(
             0,
             HistoryEntry {
@@ -62,11 +64,7 @@ impl History {
             },
         );
         self.entries.truncate(MAX_ENTRIES);
-        match self.save() {
-            Ok(true) => "Password generated and added to history.".to_string(),
-            Ok(false) => "Password generated (history is not saved this session).".to_string(),
-            Err(e) => format!("Password generated, but saving history failed: {}", e),
-        }
+        self.save()
     }
 
     /// Removes all entries and deletes the history file.
@@ -79,10 +77,10 @@ impl History {
         }
     }
 
-    /// Encrypts and writes the history. Returns `Ok(false)` if there is no key to save with.
-    fn save(&self) -> Result<bool, String> {
+    /// Encrypts and writes the history. Does nothing if there is no key to save with.
+    fn save(&self) -> Result<(), String> {
         let Some(cipher) = &self.cipher else {
-            return Ok(false);
+            return Ok(());
         };
         let plaintext = serde_json::to_vec(&self.entries).map_err(|e| e.to_string())?;
         let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
@@ -92,8 +90,7 @@ impl History {
 
         let mut data = nonce.to_vec();
         data.extend(ciphertext);
-        fs::write(&self.path, data).map_err(|e| e.to_string())?;
-        Ok(true)
+        fs::write(&self.path, data).map_err(|e| e.to_string())
     }
 
     /// Decrypts the history file into `entries`. Returns how many entries were loaded.
