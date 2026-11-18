@@ -1,11 +1,13 @@
 use crate::app::password::{generate_char_password, generate_word_password};
 use crate::app::state::{PassGenApp, Tab, Theme};
-use crate::app::utils::{load_icon, load_words_from_file, save_password_to_file};
+use crate::app::history::MAX_ENTRIES;
+use crate::app::utils::{load_icon, load_words_from_file};
 use eframe::{egui, NativeOptions};
 use rfd::FileDialog;
 use std::path::PathBuf;
 
 const PADDING: f32 = 10.0;
+const COPY_BUTTON_SIZE: egui::Vec2 = egui::vec2(26.0, 22.0);
 
 impl eframe::App for PassGenApp {
     /// Called each frame to draw the GUI.
@@ -86,6 +88,9 @@ impl eframe::App for PassGenApp {
             });
         });
 
+        // --- History (added after the status bar so it sits just above it) ---
+        egui::TopBottomPanel::bottom("history_panel").show(ctx, |ui| self.draw_history_panel(ui));
+
         // --- Draw Windows ---
         self.draw_settings_window(ctx);
         self.draw_exit_confirmation_window(ctx);
@@ -120,7 +125,7 @@ impl PassGenApp {
 
         ui.horizontal(|ui| {
             ui.label("Password Length:");
-            ui.add(egui::DragValue::new(&mut self.char_length).clamp_range(12..=128));
+            ui.add(egui::DragValue::new(&mut self.char_length).clamp_range(12..=256));
         });
 
         ui.add_space(PADDING);
@@ -135,8 +140,8 @@ impl PassGenApp {
                 self.use_special,
             ) {
                 Ok(password) => {
+                    self.status_message = self.history.add(&password);
                     self.char_password_output = password;
-                    self.status_message = save_password_to_file(&self.char_password_output, &self.password_file_path);
                 }
                 Err(e) => self.error_message = Some(e),
             }
@@ -153,7 +158,7 @@ impl PassGenApp {
                     .font(egui::FontId::monospace(20.0))
                     .desired_width(ui.available_width() - 60.0),
             );
-            if ui.button("Copy").clicked() {
+            if ui.add(copy_button()).clicked() {
                 if !self.char_password_output.is_empty() {
                     ui.output_mut(|o| o.copied_text = self.char_password_output.clone());
                     self.status_message = "Password copied to clipboard!".to_string();
@@ -200,8 +205,8 @@ impl PassGenApp {
                 self.use_uppercase_words,
             ) {
                 Ok(password) => {
+                    self.status_message = self.history.add(&password);
                     self.word_password_output = password;
-                    self.status_message = save_password_to_file(&self.word_password_output, &self.password_file_path);
                 }
                 Err(e) => self.error_message = Some(e),
             }
@@ -218,13 +223,67 @@ impl PassGenApp {
                     .font(egui::FontId::monospace(20.0))
                     .desired_width(ui.available_width() - 60.0),
             );
-            if ui.button("Copy").clicked() {
+            if ui.add(copy_button()).clicked() {
                 if !self.word_password_output.is_empty() {
                     ui.output_mut(|o| o.copied_text = self.word_password_output.clone());
                     self.status_message = "Passphrase copied to clipboard!".to_string();
                 }
             }
         });
+    }
+
+    /// Draws the list of recently generated passwords.
+    fn draw_history_panel(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(PADDING / 2.0);
+        ui.horizontal(|ui| {
+            ui.strong(format!("History (last {})", MAX_ENTRIES));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let can_clear = !self.history.entries.is_empty();
+                if ui.add_enabled(can_clear, egui::Button::new("Clear")).clicked() {
+                    self.status_message = self.history.clear();
+                }
+                ui.checkbox(&mut self.show_history, "Show");
+            });
+        });
+
+        if self.history.entries.is_empty() {
+            ui.label(egui::RichText::new("No passwords generated yet.").weak());
+        }
+
+        let mut copied = None;
+        let row_height = COPY_BUTTON_SIZE.y.max(ui.spacing().interact_size.y);
+        for entry in &self.history.entries {
+            let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), row_height), egui::Sense::hover());
+            let mut row_ui = ui.child_ui(row, egui::Layout::left_to_right(egui::Align::Center));
+            row_ui.set_clip_rect(row.intersect(ui.clip_rect()));
+
+            row_ui.label(egui::RichText::new(&entry.created).monospace().weak());
+            row_ui.add_space(PADDING);
+            let shown = if self.show_history {
+                entry.password.clone()
+            } else {
+                "•".repeat(entry.password.chars().count().min(24))
+            };
+            let password_rect = row_ui
+                .add(egui::Label::new(egui::RichText::new(shown).monospace()).wrap(false))
+                .rect;
+
+            // Sit right after the password, but never past the edge of the row:
+            // a long password slides underneath the button instead.
+            let button_x = (password_rect.right() + PADDING).min(row.right() - COPY_BUTTON_SIZE.x);
+            let button_rect = egui::Rect::from_min_size(
+                egui::pos2(button_x, row.center().y - COPY_BUTTON_SIZE.y / 2.0),
+                COPY_BUTTON_SIZE,
+            );
+            if ui.put(button_rect, copy_button()).clicked() {
+                copied = Some(entry.password.clone());
+            }
+        }
+        if let Some(password) = copied {
+            ui.output_mut(|o| o.copied_text = password);
+            self.status_message = "Password from history copied to clipboard!".to_string();
+        }
+        ui.add_space(PADDING / 2.0);
     }
 
     /// Draws the settings window when it is open.
@@ -328,13 +387,33 @@ impl PassGenApp {
     }
 }
 
+/// A button showing a "copy" icon: two overlapping pages.
+fn copy_button() -> impl egui::Widget {
+    |ui: &mut egui::Ui| {
+        let response = ui
+            .add(egui::Button::new("").min_size(COPY_BUTTON_SIZE))
+            .on_hover_text("Copy to clipboard");
+        let visuals = ui.style().interact(&response);
+        let painter = ui.painter();
+        let rounding = egui::Rounding::same(2.0);
+        let page = egui::vec2(9.0, 11.0);
+        let center = response.rect.center();
+
+        let back = egui::Rect::from_center_size(center + egui::vec2(-2.0, -2.0), page);
+        let front = egui::Rect::from_center_size(center + egui::vec2(2.0, 2.0), page);
+        painter.rect_stroke(back, rounding, visuals.fg_stroke);
+        painter.rect(front, rounding, visuals.weak_bg_fill, visuals.fg_stroke);
+        response
+    }
+}
+
 /// Launches the graphical user interface.
 pub fn run_gui_mode() {
     let icon = load_icon();
     let options = NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([540.0, 480.0])
-            .with_resizable(false)
+            .with_inner_size([540.0, 680.0])
+            .with_min_inner_size([480.0, 600.0])
             .with_icon(icon.clone()),
         ..Default::default()
     };

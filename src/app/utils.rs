@@ -3,16 +3,22 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 
-const DEFAULT_WORDS: &[&str] = &[
-    "apple", "banana", "cherry", "dragon", "eagle", "forest", "guitar", "harmony", "island", "journey",
-    "kinetic", "lantern", "mountain", "nebula", "ocean", "puzzle", "quantum", "river", "sunrise", "telescope",
-    "universe", "vortex", "waterfall", "xenon", "yellow", "zeppelin",
-];
+/// The wordlist built into the executable, written to the config folder on first launch.
+const DEFAULT_WORDS: &str = include_str!("../../words.txt");
 
-/// Gets the directory where the application executable is located.
-/// Falls back to the current working directory if the executable path cannot be determined.
-pub fn get_app_directory() -> PathBuf {
-    dirs::executable_dir().unwrap_or_else(|| std::env::current_dir().unwrap_or(PathBuf::from(".")))
+/// Gets the directory holding config.toml, words.txt and the history, creating it if needed.
+/// On Windows this is a `config` folder next to the executable; elsewhere it is
+/// `~/.config/passgen` (or `$XDG_CONFIG_HOME/passgen`).
+pub fn get_config_directory() -> PathBuf {
+    let dir = if cfg!(windows) {
+        std::env::current_exe().ok().and_then(|exe| exe.parent().map(|parent| parent.join("config")))
+    } else {
+        dirs::config_dir().map(|config| config.join("passgen"))
+    }
+    .unwrap_or_else(|| PathBuf::from("config"));
+
+    let _ = fs::create_dir_all(&dir);
+    dir
 }
 
 /// Loads an icon from the embedded icon file.
@@ -49,23 +55,11 @@ pub fn load_words_from_file(path: &PathBuf) -> (Vec<String>, String) {
     }
 }
 
-/// Saves the generated password to password.txt
-pub fn save_password_to_file(password: &str, path: &PathBuf) -> String {
-    match File::create(path) {
-        Ok(mut file) => match file.write_all(password.as_bytes()) {
-            Ok(_) => "Password saved to password.txt".to_string(),
-            Err(e) => format!("Error saving password: {}", e),
-        },
-        Err(e) => format!("Error creating password.txt: {}", e),
-    }
-}
-
 /// Creates the default words.txt file if it doesn't exist.
 pub fn create_default_words_file(path: &PathBuf) -> String {
     if !path.exists() {
-        let default_content = DEFAULT_WORDS.join("\n");
         match File::create(path) {
-            Ok(mut file) => match file.write_all(default_content.as_bytes()) {
+            Ok(mut file) => match file.write_all(DEFAULT_WORDS.as_bytes()) {
                 Ok(_) => "Created default words.txt".to_string(),
                 Err(e) => format!("Failed to create default words.txt: {}", e),
             },

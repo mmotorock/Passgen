@@ -1,3 +1,4 @@
+use crate::app::history::History;
 use clap::Parser;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -102,7 +103,6 @@ pub struct PassGenApp {
     pub use_special: bool,
     pub char_length: usize,
     pub char_password_output: String,
-    pub password_file_path: PathBuf,
 
     // Word generator state
     pub words: Vec<String>,
@@ -112,6 +112,10 @@ pub struct PassGenApp {
     pub use_separator: bool,
     pub separator_char: String,
     pub use_uppercase_words: bool,
+
+    // Recently generated passwords
+    pub history: History,
+    pub show_history: bool,
 }
 
 impl Default for PassGenApp {
@@ -135,7 +139,6 @@ impl Default for PassGenApp {
             use_special: true,
             char_length: 16,
             char_password_output: String::new(),
-            password_file_path: PathBuf::new(),
             words: Vec::new(),
             word_count: 3,
             word_password_output: String::new(),
@@ -143,6 +146,8 @@ impl Default for PassGenApp {
             use_separator: true,
             separator_char: "-".to_string(),
             use_uppercase_words: true,
+            history: History::default(),
+            show_history: false,
         }
     }
 }

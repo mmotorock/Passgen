@@ -8,13 +8,17 @@ Passgen is a versatile, secure password and passphrase generator built with Rust
 
 -   **Dual Mode:** Operates as a full GUI application or as a command-line tool.
 -   **Character-Based Generation:**
-    -   Generate strong, random passwords of a specified length (min 12 characters).
+    -   Generate strong, random passwords from 12 up to 256 characters.
     -   Customize which character sets to use (lowercase, uppercase, numbers, special).
-    -   Enforces a maximum repetition of 3 for any single character.
+    -   No character appears twice in a row, and each character appears at most 3 times (raised automatically only for very long passwords).
 -   **Word-Based Generation (Passphrases):**
     -   Create memorable passphrases using a list of words.
     -   Choose between 3, 4, or 5 words.
     -   Customize capitalization and the separator character.
+-   **Password History:**
+    -   The last 5 generated passwords (GUI and CLI) are listed at the bottom of the window, hidden until you tick "Show", each with a Copy button.
+    -   The history is stored encrypted (ChaCha20-Poly1305) in `history.dat`. The key is kept in the operating system's keyring (Windows Credential Manager, GNOME Keyring/KWallet on Linux, Keychain on macOS), so the file alone is useless to anyone who copies it.
+    -   If no keyring is available, the history is kept for the current session only.
 -   **Full Configuration:**
     -   All settings are saved to a `config.toml` file.
     -   Custom wordlists can be used by changing the path in the settings.
@@ -57,7 +61,16 @@ To build this project from the source, you will need:
 
 ### GUI Mode
 
-Simply double-click the executable to launch the graphical user interface. The application will automatically create a default `config.toml` and `words.txt` file in the same directory if they don't exist.
+Simply double-click the executable to launch the graphical user interface. The application creates a default `config.toml` on first launch.
+
+All settings, the wordlist and the history live in the config folder:
+
+| Platform | Config folder |
+|---|---|
+| Windows | `config\` next to `Passgen.exe` |
+| Linux / macOS | `~/.config/passgen/` (or `$XDG_CONFIG_HOME/passgen/`) |
+
+Copy `words.txt` from this repository into that folder to use the word generator.
 
 ### Command-Line Mode (CLI)
 

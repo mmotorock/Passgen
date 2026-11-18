@@ -1,5 +1,6 @@
+use crate::app::history::History;
 use crate::app::state::{CharacterSets, PassGenApp, Tab, Theme};
-use crate::app::utils::{get_app_directory, load_words_from_file};
+use crate::app::utils::{create_default_words_file, get_config_directory, load_words_from_file};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -9,9 +10,9 @@ impl PassGenApp {
     pub fn new() -> Self {
         let mut app = Self::default(); // Start with hard-coded defaults
 
-        let app_dir = get_app_directory();
+        let app_dir = get_config_directory();
         app.config_path = app_dir.join("config.toml");
-        app.password_file_path = app_dir.join("password.txt");
+        let default_words_status = create_default_words_file(&app_dir.join("words.txt"));
 
         let config_path = app.config_path.clone();
         let config_status = app.load_config_from_path(&config_path);
@@ -20,7 +21,14 @@ impl PassGenApp {
         let (words, word_status) = load_words_from_file(&words_file_path);
         app.words = words;
 
-        app.status_message = format!("{}\n{}", config_status, word_status);
+        let (history, history_status) = History::load(app_dir.join("history.dat"));
+        app.history = history;
+
+        app.status_message = [default_words_status, config_status, word_status, history_status]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
         app.saved_config_state = app.get_current_config_as_string();
 
         app
@@ -77,7 +85,7 @@ impl PassGenApp {
         let config = load_config_map(path);
         if config.is_empty() {
             return if path == &self.config_path {
-                self.words_file_path = get_app_directory().join("words.txt");
+                self.words_file_path = get_config_directory().join("words.txt");
                 self.words_file_path_str = self.words_file_path.to_string_lossy().to_string();
                 self.save_config()
             } else {
@@ -87,7 +95,7 @@ impl PassGenApp {
 
         self.theme = config.get("theme").and_then(|s| s.parse().ok()).unwrap_or(Theme::Dark);
 
-        let default_words_path = get_app_directory().join("words.txt");
+        let default_words_path = get_config_directory().join("words.txt");
         self.words_file_path = config.get("words_file_path").map(PathBuf::from).unwrap_or(default_words_path);
         self.words_file_path_str = self.words_file_path.to_string_lossy().to_string();
 
