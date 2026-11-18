@@ -54,7 +54,7 @@ pub struct CliArgs {
     #[arg(short, long, group = "mode")]
     pub n: Option<usize>,
 
-    /// Generates a word-based passphrase with a specific number of words (3, 4, or 5).
+    /// Generates a word-based passphrase with a specific number of words (3 to 8).
     #[arg(short, long, group = "mode", value_name = "COUNT")]
     pub w: Option<usize>,
 }
@@ -88,6 +88,7 @@ pub struct PassGenApp {
     pub config_path: PathBuf,
     pub saved_config_state: String,
     pub show_settings_window: bool,
+    pub fitted_height: f32, // Window height last fitted to the content (0 before the first fit)
     pub error_message: Option<String>, // For the error dialog
     pub clipboard_clear_at: Option<(Instant, String)>, // When to clear the clipboard, and what we copied
 
@@ -105,17 +106,16 @@ pub struct PassGenApp {
     pub char_length: usize,
     pub char_length_input: String, // Text in the length box while it is being edited
     pub char_password_output: String,
-    pub char_strength_bits: Option<f64>,
 
     // Word generator state
     pub words: Vec<String>,
     pub word_count: usize,
     pub word_password_output: String,
-    pub word_strength_bits: Option<f64>,
     pub words_file_path: PathBuf,
     pub use_separator: bool,
     pub separator_char: String,
     pub use_uppercase_words: bool,
+    pub include_number: bool,
 
     // Recently generated passwords
     pub history: History,
@@ -131,6 +131,7 @@ impl Default for PassGenApp {
             config_path: PathBuf::new(),
             saved_config_state: String::new(),
             show_settings_window: false,
+            fitted_height: 0.0,
             error_message: None,
             clipboard_clear_at: None,
             theme: Theme::Dark,
@@ -144,15 +145,14 @@ impl Default for PassGenApp {
             char_length: 16,
             char_length_input: String::new(),
             char_password_output: String::new(),
-            char_strength_bits: None,
             words: Vec::new(),
-            word_count: 3,
+            word_count: 4,
             word_password_output: String::new(),
-            word_strength_bits: None,
             words_file_path: PathBuf::new(),
             use_separator: true,
             separator_char: "-".to_string(),
             use_uppercase_words: true,
+            include_number: false,
             history: History::default(),
             show_history: false,
         }

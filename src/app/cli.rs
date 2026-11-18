@@ -1,9 +1,10 @@
 use crate::app::config::load_config_map;
 use crate::app::history::History;
-use crate::app::password::{generate_char_password, generate_word_password};
+use crate::app::password::{generate_char_password, generate_word_password, MAX_WORDS, MIN_WORDS};
 use crate::app::state::CharacterSets;
-use crate::app::utils::{create_default_words_file, get_config_directory, load_words_from_file};
+use crate::app::utils::{get_config_directory, load_words};
 use arboard::Clipboard;
+use std::path::Path;
 
 /// Launches the command-line interface for character passwords.
 pub fn run_char_cli_mode(length: usize) {
@@ -34,17 +35,14 @@ pub fn run_char_cli_mode(length: usize) {
 
 /// Launches the command-line interface for word passphrases.
 pub fn run_word_cli_mode(count: usize) {
-    if !(3..=5).contains(&count) {
-        eprintln!("Error: Word count for -w flag must be 3, 4, or 5.");
+    if !(MIN_WORDS..=MAX_WORDS).contains(&count) {
+        eprintln!("Error: Word count for -w flag must be between {} and {}.", MIN_WORDS, MAX_WORDS);
         return;
     }
 
-    let app_dir = get_config_directory();
-    let words_file_path = app_dir.join("words.txt");
-    create_default_words_file(&words_file_path);
-    let (words, _) = load_words_from_file(&words_file_path);
+    let (words, _) = load_words(Path::new(""));
 
-    match generate_word_password(count, &words, true, "-", true) {
+    match generate_word_password(count, &words, true, "-", true, false) {
         Ok(password) => {
             println!("{}", password);
             remember(&password);

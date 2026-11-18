@@ -47,83 +47,6 @@ pub fn generate_char_password(
     Err("Failed to generate a valid password after multiple attempts. Try adding more characters to the sets.".to_string())
 }
 
-/// Estimates the strength of a character password, in bits of randomness.
-/// The first character can be any in the pool; each later one any except the previous character.
-pub fn char_entropy_bits(
-    length: usize,
-    sets: &CharacterSets,
-    use_lowercase: bool,
-    use_uppercase: bool,
-    use_numbers: bool,
-    use_special: bool,
-) -> f64 {
-    let selected = selected_sets(sets, use_lowercase, use_uppercase, use_numbers, use_special);
-    let pool_size = character_pool(&selected).len() as f64;
-    if length == 0 || pool_size < 2.0 {
-        return 0.0;
-    }
-    pool_size.log2() + (length - 1) as f64 * (pool_size - 1.0).log2()
-}
-
-/// Estimates the strength of a passphrase, in bits of randomness.
-pub fn word_entropy_bits(count: usize, wordlist_size: usize) -> f64 {
-    if wordlist_size < 2 {
-        return 0.0;
-    }
-    count as f64 * (wordlist_size as f64).log2()
-}
-
-/// Guesses per second assumed for an attacker: a GPU cracking rig working on
-/// a leaked database of fast password hashes. A deliberately pessimistic figure.
-pub const GUESSES_PER_SECOND: f64 = 1e11;
-
-/// Seconds an attacker needs on average to guess a password of the given strength
-/// (half of all possibilities), at `GUESSES_PER_SECOND`.
-pub fn crack_time_seconds(bits: f64) -> f64 {
-    2f64.powf(bits - 1.0) / GUESSES_PER_SECOND
-}
-
-/// Describes a crack time in plain words, e.g. "about 3 hours" or "about 24 thousand years".
-pub fn describe_crack_time(seconds: f64) -> String {
-    const MINUTE: f64 = 60.0;
-    const HOUR: f64 = 60.0 * MINUTE;
-    const DAY: f64 = 24.0 * HOUR;
-    const YEAR: f64 = 365.25 * DAY;
-    const AGE_OF_UNIVERSE_YEARS: f64 = 1.38e10;
-
-    let plural = |value: f64, unit: &str| {
-        let rounded = value.round() as u64;
-        format!("about {} {}{}", rounded, unit, if rounded == 1 { "" } else { "s" })
-    };
-
-    if seconds < 1.0 {
-        return "less than a second".to_string();
-    }
-    if seconds < MINUTE {
-        return plural(seconds, "second");
-    }
-    if seconds < HOUR {
-        return plural(seconds / MINUTE, "minute");
-    }
-    if seconds < DAY {
-        return plural(seconds / HOUR, "hour");
-    }
-    if seconds < YEAR {
-        return plural(seconds / DAY, "day");
-    }
-
-    let years = seconds / YEAR;
-    if years >= AGE_OF_UNIVERSE_YEARS {
-        return "longer than the age of the universe".to_string();
-    }
-    for (scale, name) in [(1e9, "billion"), (1e6, "million"), (1e3, "thousand")] {
-        if years >= scale {
-            return format!("about {} {} years", (years / scale).round() as u64, name);
-        }
-    }
-    plural(years, "year")
-}
-
 /// The enabled, non-empty character sets.
 fn selected_sets(
     sets: &CharacterSets,
@@ -180,59 +103,72 @@ fn build_candidate(length: usize, pool: &[char], max_repeats: usize, rng: &mut i
     Some(password)
 }
 
+/// The fewest and most words a passphrase can have.
+pub const MIN_WORDS: usize = 3;
+pub const MAX_WORDS: usize = 8;
+
+/// The range of the optional number inserted into a passphrase.
+const PASSPHRASE_NUMBERS: std::ops::RangeInclusive<u32> = 10..=99;
+
 /// Generates a passphrase from a list of words, respecting length constraints.
+/// With `include_number`, a two-digit number is inserted at a random position.
 pub fn generate_word_password(
     count: usize,
     words: &[String],
     use_separator: bool,
     separator: &str,
     use_uppercase: bool,
+    include_number: bool,
 ) -> Result<String, String> {
+    if !(MIN_WORDS..=MAX_WORDS).contains(&count) {
+        return Err(format!("Word count must be between {} and {}.", MIN_WORDS, MAX_WORDS));
+    }
     if words.len() < count {
         return Err(format!(
-            "Not enough words in words.txt (found {}, need at least {}).",
+            "Not enough words in the wordlist (found {}, need at least {}).",
             words.len(),
             count
         ));
     }
 
-    let max_length = match count {
-        3 => 30,
-        4 => 35,
-        5 => 40,
-        _ => return Err("Invalid word count.".to_string()),
-    };
+    // Keeps passphrases from unusually long custom wordlists manageable;
+    // the built-in list never comes close to this.
+    let max_length = count * 10 + if include_number { 3 } else { 0 };
+    let mut rng = thread_rng();
 
     for _ in 0..100 {
-        let chosen_words: Vec<&String> = words.choose_multiple(&mut thread_rng(), count).collect();
-
-        let processed_words: Vec<String> = chosen_words
-            .iter()
+        let mut parts: Vec<String> = words
+            .choose_multiple(&mut rng, count)
             .map(|word| {
                 let mut chars = word.chars();
                 match chars.next() {
                     None => String::new(),
                     Some(first) => {
                         if use_uppercase {
-                            first.to_uppercase().to_string() + &word[first.len_utf8()..]
+                            first.to_uppercase().to_string() + chars.as_str()
                         } else {
-                            first.to_lowercase().to_string() + &word[first.len_utf8()..]
+                            first.to_lowercase().to_string() + chars.as_str()
                         }
                     }
                 }
             })
             .collect();
 
-        let separator_str = if use_separator { separator } else { "" };
-        let passphrase = processed_words.join(separator_str);
+        if include_number {
+            let position = rng.gen_range(0..=parts.len());
+            parts.insert(position, rng.gen_range(PASSPHRASE_NUMBERS).to_string());
+        }
 
-        if passphrase.len() <= max_length {
+        let separator_str = if use_separator { separator } else { "" };
+        let passphrase = parts.join(separator_str);
+
+        if passphrase.chars().count() <= max_length {
             return Ok(passphrase);
         }
     }
 
     Err(format!(
-        "Could not generate a passphrase under {} characters. Check words.txt for long words.",
+        "Could not generate a passphrase under {} characters. Check the wordlist for long words.",
         max_length
     ))
 }
@@ -295,36 +231,39 @@ mod tests {
         assert_eq!(password.len(), 40);
     }
 
-    #[test]
-    fn estimates_strength() {
-        let sets = CharacterSets::default();
-        let bits = char_entropy_bits(16, &sets, true, true, true, true);
-        assert!((bits - (88f64.log2() + 15.0 * 87f64.log2())).abs() < 1e-9);
-        assert_eq!(char_entropy_bits(16, &sets, false, false, false, false), 0.0);
-        assert!((word_entropy_bits(4, 7776) - 4.0 * 7776f64.log2()).abs() < 1e-9);
+    fn wordlist() -> Vec<String> {
+        ["apple", "otter", "kettle", "robin", "cactus", "tulip", "mango", "piano", "comet", "maple"]
+            .iter()
+            .map(|w| w.to_string())
+            .collect()
     }
 
     #[test]
-    fn crack_time_follows_character_variety() {
-        let sets = CharacterSets::default();
-        let time = |lower, upper, numbers, special| {
-            crack_time_seconds(char_entropy_bits(12, &sets, lower, upper, numbers, special))
-        };
-        let numbers_only = time(false, false, true, false);
-        let lowercase_only = time(true, false, false, false);
-        let mixed_case = time(true, true, false, false);
-        let everything = time(true, true, true, true);
-        assert!(numbers_only < 60.0, "12 digits should fall within a minute");
-        assert!(numbers_only < lowercase_only && lowercase_only < mixed_case && mixed_case < everything);
+    fn passphrase_has_requested_words() {
+        for count in MIN_WORDS..=MAX_WORDS {
+            let passphrase = generate_word_password(count, &wordlist(), true, "-", true, false).unwrap();
+            let parts: Vec<&str> = passphrase.split('-').collect();
+            assert_eq!(parts.len(), count);
+            assert!(parts.iter().all(|p| p.chars().next().unwrap().is_uppercase()));
+        }
     }
 
     #[test]
-    fn describes_crack_times() {
-        assert_eq!(describe_crack_time(0.2), "less than a second");
-        assert_eq!(describe_crack_time(1.0), "about 1 second");
-        assert_eq!(describe_crack_time(3.0 * 3600.0), "about 3 hours");
-        assert_eq!(describe_crack_time(24_000.0 * 365.25 * 86400.0), "about 24 thousand years");
-        assert_eq!(describe_crack_time(1e30), "longer than the age of the universe");
+    fn passphrase_includes_one_number_when_asked() {
+        for _ in 0..200 {
+            let passphrase = generate_word_password(4, &wordlist(), true, "-", false, true).unwrap();
+            let parts: Vec<&str> = passphrase.split('-').collect();
+            assert_eq!(parts.len(), 5);
+            let numbers: Vec<u32> = parts.iter().filter_map(|p| p.parse().ok()).collect();
+            assert_eq!(numbers.len(), 1, "{}", passphrase);
+            assert!(PASSPHRASE_NUMBERS.contains(&numbers[0]));
+        }
+    }
+
+    #[test]
+    fn passphrase_rejects_bad_word_counts() {
+        assert!(generate_word_password(MIN_WORDS - 1, &wordlist(), true, "-", true, false).is_err());
+        assert!(generate_word_password(MAX_WORDS + 1, &wordlist(), true, "-", true, false).is_err());
     }
 
     #[test]

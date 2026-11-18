@@ -1,16 +1,15 @@
-use crate::app::password::{
-    char_entropy_bits, crack_time_seconds, describe_crack_time, generate_char_password, generate_word_password,
-    word_entropy_bits, GUESSES_PER_SECOND,
-};
+use crate::app::password::{generate_char_password, generate_word_password, MAX_WORDS, MIN_WORDS};
 use crate::app::state::{PassGenApp, Tab, Theme};
 use crate::app::history::MAX_ENTRIES;
-use crate::app::utils::{load_icon, load_words_from_file};
+use crate::app::utils::{load_icon, load_words};
 use eframe::{egui, NativeOptions};
 use rfd::FileDialog;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 const PADDING: f32 = 10.0;
+const PANEL_MARGIN: f32 = 8.0; // egui's default inner margin of the central panel
+const MIN_WINDOW_WIDTH: f32 = 480.0;
 const MIN_LENGTH: usize = 12;
 const MAX_LENGTH: usize = 256;
 const LENGTH_BOX_WIDTH: f32 = 40.0;
@@ -50,6 +49,7 @@ impl eframe::App for PassGenApp {
                         self.use_separator = defaults.use_separator;
                         self.separator_char = defaults.separator_char;
                         self.use_uppercase_words = defaults.use_uppercase_words;
+                        self.include_number = defaults.include_number;
                         self.status_message = "Default settings restored.".to_string();
                         ui.close_menu();
                     }
@@ -57,31 +57,37 @@ impl eframe::App for PassGenApp {
             });
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            // --- Tab Selection ---
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.active_tab, Tab::Character, "Characters");
-                ui.selectable_value(&mut self.active_tab, Tab::Word, "Words");
-            });
-            ui.separator();
-
-            // --- Render Active Tab ---
-            match self.active_tab {
-                Tab::Character => self.draw_character_tab(ui),
-                Tab::Word => self.draw_word_tab(ui),
-            }
-        });
-
-        // --- Status Bar ---
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+        // --- Status Bar (bottom panels must be added before the central panel) ---
+        let status_bar = egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.add_space(PADDING);
                 ui.label(egui::RichText::new(&self.status_message).italics());
             });
         });
 
-        // --- History (added after the status bar so it sits just above it) ---
-        egui::TopBottomPanel::bottom("history_panel").show(ctx, |ui| self.draw_history_panel(ui));
+        let content_bottom = egui::CentralPanel::default()
+            .show(ctx, |ui| {
+                // --- Tab Selection ---
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.active_tab, Tab::Character, "Characters");
+                    ui.selectable_value(&mut self.active_tab, Tab::Word, "Words");
+                });
+                ui.separator();
+
+                // --- Render Active Tab ---
+                match self.active_tab {
+                    Tab::Character => self.draw_character_tab(ui),
+                    Tab::Word => self.draw_word_tab(ui),
+                }
+
+                // --- History, directly under the generated password ---
+                ui.add_space(PADDING);
+                ui.separator();
+                self.draw_history_panel(ui);
+                ui.cursor().min.y
+            })
+            .inner;
+        self.fit_window_to_content(ctx, content_bottom + PANEL_MARGIN + status_bar.response.rect.height());
 
         // --- Draw Windows ---
         self.draw_settings_window(ctx);
@@ -179,7 +185,6 @@ impl PassGenApp {
                 self.copy_output(ui.ctx());
             }
         });
-        draw_strength(ui, self.char_strength_bits);
     }
 
     /// Draws the UI for the "Words" tab.
@@ -190,13 +195,15 @@ impl PassGenApp {
 
         ui.horizontal(|ui| {
             ui.label("Number of words:");
-            ui.radio_value(&mut self.word_count, 3, "3");
-            ui.radio_value(&mut self.word_count, 4, "4");
-            ui.radio_value(&mut self.word_count, 5, "5");
+            for count in MIN_WORDS..=MAX_WORDS {
+                ui.radio_value(&mut self.word_count, count, count.to_string());
+            }
         });
         ui.add_space(PADDING);
 
         ui.checkbox(&mut self.use_uppercase_words, "Uppercase first character of words");
+        ui.checkbox(&mut self.include_number, "Include a number")
+            .on_hover_text("Adds a two-digit number at a random position, e.g. Mango-42-Otter-Kettle-Robin");
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.use_separator, "Separator character:");
             ui.add_enabled_ui(self.use_separator, |ui| {
@@ -231,12 +238,10 @@ impl PassGenApp {
                 self.copy_output(ui.ctx());
             }
         });
-        draw_strength(ui, self.word_strength_bits);
     }
 
     /// Draws the list of recently generated passwords.
     fn draw_history_panel(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(PADDING / 2.0);
         ui.horizontal(|ui| {
             ui.strong(format!("History (last {})", MAX_ENTRIES));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -293,8 +298,10 @@ impl PassGenApp {
 
     /// Draws the settings window when it is open.
     fn draw_settings_window(&mut self, ctx: &egui::Context) {
+        // A local copy, because the window's contents need `self` mutably too.
+        let mut open = self.show_settings_window;
         egui::Window::new("Settings")
-            .open(&mut self.show_settings_window)
+            .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
@@ -324,27 +331,31 @@ impl PassGenApp {
                 ui.heading("Word Generator");
                 ui.label("Wordlist File Path:");
 
-                let response = ui.add(egui::TextEdit::singleline(&mut self.words_file_path_str).desired_width(f32::INFINITY));
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.words_file_path_str)
+                        .hint_text("Built-in list of common words")
+                        .desired_width(f32::INFINITY),
+                );
                 if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    let new_path = PathBuf::from(&self.words_file_path_str);
+                    let new_path = PathBuf::from(self.words_file_path_str.trim());
                     if new_path != self.words_file_path {
-                        self.words_file_path = new_path;
-                        let (words, status) = load_words_from_file(&self.words_file_path);
-                        self.words = words;
-                        self.status_message = status;
+                        self.set_wordlist(new_path);
                     }
                 }
 
-                if ui.button("Browse for Wordlist").clicked() {
-                    if let Some(path) = FileDialog::new().add_filter("Text File", &["txt"]).pick_file() {
-                        self.words_file_path_str = path.to_string_lossy().to_string();
-                        self.words_file_path = path;
-                        let (words, status) = load_words_from_file(&self.words_file_path);
-                        self.words = words;
-                        self.status_message = status;
+                ui.horizontal(|ui| {
+                    if ui.button("Browse for Wordlist").clicked() {
+                        if let Some(path) = FileDialog::new().add_filter("Text File", &["txt"]).pick_file() {
+                            self.set_wordlist(path);
+                        }
                     }
-                }
+                    let using_custom = !self.words_file_path.as_os_str().is_empty();
+                    if ui.add_enabled(using_custom, egui::Button::new("Use Built-in List")).clicked() {
+                        self.set_wordlist(PathBuf::new());
+                    }
+                });
             });
+        self.show_settings_window = open;
     }
 
     /// Draws the error dialog when an error message is present.
@@ -376,6 +387,23 @@ impl PassGenApp {
 }
 
 impl PassGenApp {
+    /// Keeps the window tall enough for its content without empty space: it is sized to fit
+    /// on startup, grows if the content does (more history, a taller tab) and can't be
+    /// shrunk below the content. Extra height from resizing ends up below the history.
+    fn fit_window_to_content(&mut self, ctx: &egui::Context, needed_height: f32) {
+        let needed = needed_height.ceil();
+        if (needed - self.fitted_height).abs() < 1.0 {
+            return;
+        }
+        let current = ctx.screen_rect().size();
+        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(MIN_WINDOW_WIDTH, needed)));
+        let first_fit = self.fitted_height == 0.0;
+        if first_fit || current.y < needed {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(current.x, needed)));
+        }
+        self.fitted_height = needed;
+    }
+
     /// Generates passwords for both tabs so one is ready as soon as the window opens.
     /// Errors are ignored here; they are shown when the user presses Generate.
     fn generate_on_startup(&mut self) {
@@ -395,14 +423,6 @@ impl PassGenApp {
                     self.use_numbers,
                     self.use_special,
                 )?;
-                self.char_strength_bits = Some(char_entropy_bits(
-                    self.char_length,
-                    &self.char_sets,
-                    self.use_lowercase,
-                    self.use_uppercase,
-                    self.use_numbers,
-                    self.use_special,
-                ));
             }
             Tab::Word => {
                 self.word_password_output = generate_word_password(
@@ -411,11 +431,25 @@ impl PassGenApp {
                     self.use_separator,
                     &self.separator_char,
                     self.use_uppercase_words,
+                    self.include_number,
                 )?;
-                self.word_strength_bits = Some(word_entropy_bits(self.word_count, self.words.len()));
             }
         }
         Ok(())
+    }
+
+    /// Switches to the wordlist at `path` (empty for the built-in list) and
+    /// generates a fresh passphrase from it.
+    fn set_wordlist(&mut self, path: PathBuf) {
+        self.words_file_path_str = path.to_string_lossy().to_string();
+        self.words_file_path = path;
+        let (words, status) = load_words(&self.words_file_path);
+        self.words = words;
+        self.status_message = status;
+        if let Err(e) = self.generate(Tab::Word) {
+            self.word_password_output.clear();
+            self.status_message = e;
+        }
     }
 
     /// Generates a new password for the active tab and copies it.
@@ -492,35 +526,6 @@ impl PassGenApp {
     }
 }
 
-/// Shows roughly how long the displayed password would take to crack, colored by how safe that is.
-fn draw_strength(ui: &mut egui::Ui, bits: Option<f64>) {
-    let Some(bits) = bits else {
-        return;
-    };
-    const DAY: f64 = 86_400.0;
-    const YEAR: f64 = 365.25 * DAY;
-
-    let seconds = crack_time_seconds(bits);
-    let color = match seconds {
-        s if s < DAY => egui::Color32::from_rgb(220, 80, 80),
-        s if s < 1_000.0 * YEAR => egui::Color32::from_rgb(230, 160, 50),
-        s if s < 1e9 * YEAR => egui::Color32::from_rgb(140, 190, 70),
-        _ => egui::Color32::from_rgb(60, 170, 90),
-    };
-
-    ui.add_space(PADDING / 2.0);
-    ui.horizontal(|ui| {
-        ui.label("Time to crack:");
-        ui.label(egui::RichText::new(describe_crack_time(seconds)).color(color).strong());
-    })
-    .response
-    .on_hover_text(format!(
-        "Average time for an attacker making {} billion guesses per second \
-         (a GPU cracking rig working on a leaked password database).",
-        GUESSES_PER_SECOND / 1e9
-    ));
-}
-
 /// A button showing a "copy" icon: two overlapping pages.
 fn copy_button() -> impl egui::Widget {
     |ui: &mut egui::Ui| {
@@ -546,8 +551,8 @@ pub fn run_gui_mode() {
     let icon = load_icon();
     let options = NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([540.0, 720.0])
-            .with_min_inner_size([480.0, 600.0])
+            .with_inner_size([540.0, 600.0]) // The height is fitted to the content on startup
+            .with_min_inner_size([MIN_WINDOW_WIDTH, 300.0])
             .with_icon(icon.clone()),
         ..Default::default()
     };
