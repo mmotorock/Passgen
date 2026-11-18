@@ -255,7 +255,11 @@ impl PassGenApp {
         for entry in &self.history.entries {
             let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), row_height), egui::Sense::hover());
             let mut row_ui = ui.child_ui(row, egui::Layout::left_to_right(egui::Align::Center));
-            row_ui.set_clip_rect(row.intersect(ui.clip_rect()));
+            // Stop the text (and its text-selection hover area) where the button's
+            // furthest position begins, so hovering the button shows a normal cursor.
+            let mut text_area = row;
+            text_area.max.x -= COPY_BUTTON_SIZE.x;
+            row_ui.set_clip_rect(text_area.intersect(ui.clip_rect()));
 
             row_ui.label(egui::RichText::new(&entry.created).monospace().weak());
             row_ui.add_space(PADDING);
