@@ -1,22 +1,20 @@
-use crate::app::state::CharacterSets;
+use crate::app::config::{CharacterSettings, WordSettings};
 use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng};
 use std::collections::HashMap;
+
+/// The shortest and longest character passwords.
+pub const MIN_LENGTH: usize = 12;
+pub const MAX_LENGTH: usize = 256;
 
 /// Generates a password from random characters.
 ///
 /// Every character is picked independently from the combined pool of selected sets.
 /// No character appears twice in a row, and no character appears more than
 /// `max_repeats_for` times, so passwords of any length can be generated.
-pub fn generate_char_password(
-    length: usize,
-    sets: &CharacterSets,
-    use_lowercase: bool,
-    use_uppercase: bool,
-    use_numbers: bool,
-    use_special: bool,
-) -> Result<String, String> {
-    let selected_sets = selected_sets(sets, use_lowercase, use_uppercase, use_numbers, use_special);
+pub fn generate_char_password(settings: &CharacterSettings) -> Result<String, String> {
+    let length = settings.length;
+    let selected_sets = selected_sets(settings);
 
     if selected_sets.is_empty() {
         return Err("You must select at least one character set.".to_string());
@@ -48,18 +46,12 @@ pub fn generate_char_password(
 }
 
 /// The enabled, non-empty character sets.
-fn selected_sets(
-    sets: &CharacterSets,
-    use_lowercase: bool,
-    use_uppercase: bool,
-    use_numbers: bool,
-    use_special: bool,
-) -> Vec<Vec<char>> {
+fn selected_sets(settings: &CharacterSettings) -> Vec<Vec<char>> {
     [
-        (use_lowercase, &sets.lowercase),
-        (use_uppercase, &sets.uppercase),
-        (use_numbers, &sets.numbers),
-        (use_special, &sets.special),
+        (settings.use_lowercase, &settings.lowercase),
+        (settings.use_uppercase, &settings.uppercase),
+        (settings.use_numbers, &settings.numbers),
+        (settings.use_special, &settings.special),
     ]
     .into_iter()
     .filter(|(enabled, set)| *enabled && !set.is_empty())
@@ -112,14 +104,8 @@ const PASSPHRASE_NUMBERS: std::ops::RangeInclusive<u32> = 10..=99;
 
 /// Generates a passphrase from a list of words, respecting length constraints.
 /// With `include_number`, a two-digit number is inserted at a random position.
-pub fn generate_word_password(
-    count: usize,
-    words: &[String],
-    use_separator: bool,
-    separator: &str,
-    use_uppercase: bool,
-    include_number: bool,
-) -> Result<String, String> {
+pub fn generate_word_password(settings: &WordSettings, words: &[String]) -> Result<String, String> {
+    let count = settings.count;
     if !(MIN_WORDS..=MAX_WORDS).contains(&count) {
         return Err(format!("Word count must be between {} and {}.", MIN_WORDS, MAX_WORDS));
     }
@@ -133,7 +119,7 @@ pub fn generate_word_password(
 
     // Keeps passphrases from unusually long custom wordlists manageable;
     // the built-in list never comes close to this.
-    let max_length = count * 10 + if include_number { 3 } else { 0 };
+    let max_length = count * 10 + if settings.include_number { 3 } else { 0 };
     let mut rng = thread_rng();
 
     for _ in 0..100 {
@@ -144,7 +130,7 @@ pub fn generate_word_password(
                 match chars.next() {
                     None => String::new(),
                     Some(first) => {
-                        if use_uppercase {
+                        if settings.capitalize {
                             first.to_uppercase().to_string() + chars.as_str()
                         } else {
                             first.to_lowercase().to_string() + chars.as_str()
@@ -154,12 +140,12 @@ pub fn generate_word_password(
             })
             .collect();
 
-        if include_number {
+        if settings.include_number {
             let position = rng.gen_range(0..=parts.len());
             parts.insert(position, rng.gen_range(PASSPHRASE_NUMBERS).to_string());
         }
 
-        let separator_str = if use_separator { separator } else { "" };
+        let separator_str = if settings.use_separator { settings.separator.as_str() } else { "" };
         let passphrase = parts.join(separator_str);
 
         if passphrase.chars().count() <= max_length {
@@ -178,7 +164,11 @@ mod tests {
     use super::*;
 
     fn generate(length: usize) -> String {
-        generate_char_password(length, &CharacterSets::default(), true, true, true, true).unwrap()
+        generate_char_password(&CharacterSettings { length, ..Default::default() }).unwrap()
+    }
+
+    fn words(count: usize, capitalize: bool, include_number: bool) -> WordSettings {
+        WordSettings { count, capitalize, include_number, ..Default::default() }
     }
 
     #[test]
@@ -200,8 +190,9 @@ mod tests {
 
     #[test]
     fn respects_repeat_limit() {
+        let pool_size = character_pool(&selected_sets(&CharacterSettings::default())).len();
         for length in [16, 128, 256] {
-            let limit = max_repeats_for(length, 88);
+            let limit = max_repeats_for(length, pool_size);
             for _ in 0..100 {
                 let mut counts = HashMap::new();
                 for c in generate(length).chars() {
@@ -210,12 +201,21 @@ mod tests {
                 assert!(counts.values().all(|&n| n <= limit));
             }
         }
-        assert_eq!(max_repeats_for(16, 88), 3);
+        assert_eq!(max_repeats_for(16, pool_size), 3);
+    }
+
+    #[test]
+    fn default_sets_avoid_hard_to_read_characters() {
+        let defaults = CharacterSettings::default();
+        let all = format!("{}{}{}{}", defaults.lowercase, defaults.uppercase, defaults.numbers, defaults.special);
+        for c in "0Oo1lIB'\"`|;:,._^~\\/()[]{}<>CKPSUVWXZ".chars() {
+            assert!(!all.contains(c), "default sets should not contain {:?}", c);
+        }
     }
 
     #[test]
     fn includes_every_selected_set() {
-        let sets = CharacterSets::default();
+        let sets = CharacterSettings::default();
         for _ in 0..500 {
             let password = generate(12);
             for set in [&sets.lowercase, &sets.uppercase, &sets.numbers, &sets.special] {
@@ -226,8 +226,15 @@ mod tests {
 
     #[test]
     fn small_custom_set_still_works() {
-        let sets = CharacterSets { numbers: "01".to_string(), ..CharacterSets::default() };
-        let password = generate_char_password(40, &sets, false, false, true, false).unwrap();
+        let settings = CharacterSettings {
+            length: 40,
+            use_lowercase: false,
+            use_uppercase: false,
+            use_special: false,
+            numbers: "01".to_string(),
+            ..Default::default()
+        };
+        let password = generate_char_password(&settings).unwrap();
         assert_eq!(password.len(), 40);
     }
 
@@ -241,7 +248,7 @@ mod tests {
     #[test]
     fn passphrase_has_requested_words() {
         for count in MIN_WORDS..=MAX_WORDS {
-            let passphrase = generate_word_password(count, &wordlist(), true, "-", true, false).unwrap();
+            let passphrase = generate_word_password(&words(count, true, false), &wordlist()).unwrap();
             let parts: Vec<&str> = passphrase.split('-').collect();
             assert_eq!(parts.len(), count);
             assert!(parts.iter().all(|p| p.chars().next().unwrap().is_uppercase()));
@@ -251,7 +258,7 @@ mod tests {
     #[test]
     fn passphrase_includes_one_number_when_asked() {
         for _ in 0..200 {
-            let passphrase = generate_word_password(4, &wordlist(), true, "-", false, true).unwrap();
+            let passphrase = generate_word_password(&words(4, false, true), &wordlist()).unwrap();
             let parts: Vec<&str> = passphrase.split('-').collect();
             assert_eq!(parts.len(), 5);
             let numbers: Vec<u32> = parts.iter().filter_map(|p| p.parse().ok()).collect();
@@ -262,12 +269,19 @@ mod tests {
 
     #[test]
     fn passphrase_rejects_bad_word_counts() {
-        assert!(generate_word_password(MIN_WORDS - 1, &wordlist(), true, "-", true, false).is_err());
-        assert!(generate_word_password(MAX_WORDS + 1, &wordlist(), true, "-", true, false).is_err());
+        assert!(generate_word_password(&words(MIN_WORDS - 1, true, false), &wordlist()).is_err());
+        assert!(generate_word_password(&words(MAX_WORDS + 1, true, false), &wordlist()).is_err());
     }
 
     #[test]
     fn rejects_no_sets() {
-        assert!(generate_char_password(16, &CharacterSets::default(), false, false, false, false).is_err());
+        let settings = CharacterSettings {
+            use_lowercase: false,
+            use_uppercase: false,
+            use_numbers: false,
+            use_special: false,
+            ..Default::default()
+        };
+        assert!(generate_char_password(&settings).is_err());
     }
 }

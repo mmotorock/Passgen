@@ -1,54 +1,57 @@
-use crate::app::config::load_config_map;
+use crate::app::config::{CharacterSettings, Config, WordSettings, CONFIG_FILE};
 use crate::app::history::History;
-use crate::app::password::{generate_char_password, generate_word_password, MAX_WORDS, MIN_WORDS};
-use crate::app::state::CharacterSets;
+use crate::app::password::{
+    generate_char_password, generate_word_password, MAX_LENGTH, MAX_WORDS, MIN_LENGTH, MIN_WORDS,
+};
 use crate::app::utils::{get_config_directory, load_words};
 use arboard::Clipboard;
-use std::path::Path;
 
-/// Launches the command-line interface for character passwords.
+/// Launches the command-line interface for character passwords, using the saved settings.
 pub fn run_char_cli_mode(length: usize) {
-    let app_dir = get_config_directory();
-    let config_path = app_dir.join("config.toml");
-    let config = load_config_map(&config_path);
-    let defaults = CharacterSets::default();
-    let sets = CharacterSets {
-        lowercase: config.get("lowercase_chars").cloned().unwrap_or(defaults.lowercase),
-        uppercase: config.get("uppercase_chars").cloned().unwrap_or(defaults.uppercase),
-        numbers: config.get("number_chars").cloned().unwrap_or(defaults.numbers),
-        special: config.get("special_chars").cloned().unwrap_or(defaults.special),
-    };
-
-    match generate_char_password(length, &sets, true, true, true, true) {
-        Ok(password) => {
-            println!("{}", password);
-            remember(&password);
-            if let Ok(mut clipboard) = Clipboard::new() {
-                if clipboard.set_text(password).is_ok() {
-                    eprintln!("Password copied to clipboard.");
-                }
-            }
-        }
-        Err(e) => eprintln!("Error: {}", e),
+    if !(MIN_LENGTH..=MAX_LENGTH).contains(&length) {
+        eprintln!("Error: Length for -n flag must be between {} and {}.", MIN_LENGTH, MAX_LENGTH);
+        return;
     }
+
+    let config = load_config();
+    let settings = CharacterSettings { length, ..config.characters };
+    output(generate_char_password(&settings), "Password");
 }
 
-/// Launches the command-line interface for word passphrases.
+/// Launches the command-line interface for word passphrases, using the saved settings.
 pub fn run_word_cli_mode(count: usize) {
     if !(MIN_WORDS..=MAX_WORDS).contains(&count) {
         eprintln!("Error: Word count for -w flag must be between {} and {}.", MIN_WORDS, MAX_WORDS);
         return;
     }
 
-    let (words, _) = load_words(Path::new(""));
+    let config = load_config();
+    let (words, word_status) = load_words(&config.words_file_path);
+    if words.is_empty() {
+        eprintln!("{}", word_status);
+    }
+    let settings = WordSettings { count, ..config.words };
+    output(generate_word_password(&settings, &words), "Passphrase");
+}
 
-    match generate_word_password(count, &words, true, "-", true, false) {
+/// Loads the shared settings, reporting anything noteworthy on stderr.
+fn load_config() -> Config {
+    let (config, messages) = Config::load(&get_config_directory().join(CONFIG_FILE));
+    for message in messages {
+        eprintln!("{}", message);
+    }
+    config
+}
+
+/// Prints a generated password, then records it in the history and copies it.
+fn output(result: Result<String, String>, kind: &str) {
+    match result {
         Ok(password) => {
             println!("{}", password);
             remember(&password);
             if let Ok(mut clipboard) = Clipboard::new() {
                 if clipboard.set_text(password).is_ok() {
-                    eprintln!("Passphrase copied to clipboard.");
+                    eprintln!("{} copied to clipboard.", kind);
                 }
             }
         }

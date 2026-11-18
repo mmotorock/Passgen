@@ -10,6 +10,7 @@ Passgen is a versatile, secure password and passphrase generator built with Rust
 -   **Character-Based Generation:**
     -   Generate strong, random passwords from 12 up to 256 characters.
     -   Customize which character sets to use (lowercase, uppercase, numbers, special).
+    -   The default sets are chosen to be easy to read out, e.g. over the phone: they leave out look-alikes (`0 O o 1 l I B`), uppercase letters that look like their lowercase (`C K P S U V W X Z`), and symbols that are tiny or hard to name (quotes, brackets, `| ; : , . _ ^`). Edit the sets to change this.
     -   No character appears twice in a row, and each character appears at most 3 times (raised automatically only for very long passwords).
 -   **Word-Based Generation (Passphrases):**
     -   Create memorable passphrases like `Mango-Otter-Kettle-Robin`.
@@ -79,9 +80,31 @@ All settings and the history live in the config folder:
 
 The word generator uses its built-in list unless you choose a custom wordlist in the settings.
 
+`config.toml` is a standard TOML file, so it can be edited by hand while the app is closed:
+
+```toml
+theme = "Dark"            # "Dark" or "Light"
+default_tab = "Character" # "Character" or "Word"
+words_file_path = ""      # empty = built-in wordlist
+
+[characters]
+length = 16               # 12 to 256
+use_special = true
+special = "!@#$%&*+=?-"
+# ...
+
+[words]
+count = 4                 # 3 to 8
+separator = "-"
+capitalize = true
+include_number = false
+```
+
+Missing or invalid entries fall back to their defaults (and are reported in the status bar). Config files from earlier versions are converted automatically, keeping the original as `config.toml.bak`.
+
 ### Command-Line Mode (CLI)
 
-You can also run the application from your terminal to quickly generate and copy a password.
+You can also run the application from your terminal to quickly generate and copy a password. The CLI uses the same saved settings as the GUI (character sets, wordlist, separator, number option); only the length or word count comes from the command line.
 
 -   **Generate a 16-character password:**
     ```bash

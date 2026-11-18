@@ -1,4 +1,5 @@
-use crate::app::password::{generate_char_password, generate_word_password, MAX_WORDS, MIN_WORDS};
+use crate::app::config::{CharacterSettings, Config};
+use crate::app::password::{generate_char_password, generate_word_password, MAX_LENGTH, MAX_WORDS, MIN_LENGTH, MIN_WORDS};
 use crate::app::state::{PassGenApp, Tab, Theme};
 use crate::app::history::MAX_ENTRIES;
 use crate::app::utils::{load_icon, load_words};
@@ -10,8 +11,6 @@ use std::time::{Duration, Instant};
 const PADDING: f32 = 10.0;
 const PANEL_MARGIN: f32 = 8.0; // egui's default inner margin of the central panel
 const MIN_WINDOW_WIDTH: f32 = 480.0;
-const MIN_LENGTH: usize = 12;
-const MAX_LENGTH: usize = 256;
 const LENGTH_BOX_WIDTH: f32 = 40.0;
 const COPY_BUTTON_SIZE: egui::Vec2 = egui::vec2(26.0, 22.0);
 const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(120);
@@ -20,7 +19,7 @@ impl eframe::App for PassGenApp {
     /// Called each frame to draw the GUI.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Apply the selected theme
-        ctx.set_visuals(match self.theme {
+        ctx.set_visuals(match self.config.theme {
             Theme::Light => egui::Visuals::light(),
             Theme::Dark => egui::Visuals::dark(),
         });
@@ -37,19 +36,12 @@ impl eframe::App for PassGenApp {
                         ui.close_menu();
                     }
                     if ui.button("Restore Defaults").clicked() {
-                        let defaults = Self::default();
-                        self.default_tab = defaults.default_tab;
-                        self.char_sets = defaults.char_sets;
-                        self.use_lowercase = defaults.use_lowercase;
-                        self.use_uppercase = defaults.use_uppercase;
-                        self.use_numbers = defaults.use_numbers;
-                        self.use_special = defaults.use_special;
-                        self.char_length = defaults.char_length;
-                        self.word_count = defaults.word_count;
-                        self.use_separator = defaults.use_separator;
-                        self.separator_char = defaults.separator_char;
-                        self.use_uppercase_words = defaults.use_uppercase_words;
-                        self.include_number = defaults.include_number;
+                        // Keep the theme and wordlist; reset everything else.
+                        self.config = Config {
+                            theme: self.config.theme,
+                            words_file_path: self.config.words_file_path.clone(),
+                            ..Config::default()
+                        };
                         self.status_message = "Default settings restored.".to_string();
                         ui.close_menu();
                     }
@@ -94,10 +86,11 @@ impl eframe::App for PassGenApp {
         self.draw_error_dialog(ctx);
 
         // Settings are saved as soon as they change, so there is nothing to confirm on exit.
-        if self.get_current_config_as_string() != self.saved_config_state {
-            if let Err(e) = self.save_config() {
+        if self.config != self.saved_config {
+            if let Err(e) = self.config.save(&self.config_path) {
                 self.status_message = e;
             }
+            self.saved_config = self.config.clone(); // Don't retry a failed save every frame
         }
         self.clear_clipboard_when_due(ctx);
     }
@@ -110,17 +103,17 @@ impl PassGenApp {
             .num_columns(2)
             .spacing([PADDING, PADDING])
             .show(ui, |ui| {
-                ui.checkbox(&mut self.use_lowercase, "Lowercase");
-                ui.add(egui::TextEdit::singleline(&mut self.char_sets.lowercase).desired_width(f32::INFINITY));
+                ui.checkbox(&mut self.config.characters.use_lowercase, "Lowercase");
+                ui.add(egui::TextEdit::singleline(&mut self.config.characters.lowercase).desired_width(f32::INFINITY));
                 ui.end_row();
-                ui.checkbox(&mut self.use_uppercase, "Uppercase");
-                ui.add(egui::TextEdit::singleline(&mut self.char_sets.uppercase).desired_width(f32::INFINITY));
+                ui.checkbox(&mut self.config.characters.use_uppercase, "Uppercase");
+                ui.add(egui::TextEdit::singleline(&mut self.config.characters.uppercase).desired_width(f32::INFINITY));
                 ui.end_row();
-                ui.checkbox(&mut self.use_numbers, "Numbers");
-                ui.add(egui::TextEdit::singleline(&mut self.char_sets.numbers).desired_width(f32::INFINITY));
+                ui.checkbox(&mut self.config.characters.use_numbers, "Numbers");
+                ui.add(egui::TextEdit::singleline(&mut self.config.characters.numbers).desired_width(f32::INFINITY));
                 ui.end_row();
-                ui.checkbox(&mut self.use_special, "Special");
-                ui.add(egui::TextEdit::singleline(&mut self.char_sets.special).desired_width(f32::INFINITY));
+                ui.checkbox(&mut self.config.characters.use_special, "Special");
+                ui.add(egui::TextEdit::singleline(&mut self.config.characters.special).desired_width(f32::INFINITY));
                 ui.end_row();
             });
 
@@ -133,14 +126,14 @@ impl PassGenApp {
 
             // The slider fills the row, leaving room for the text box on the right.
             ui.spacing_mut().slider_width = ui.available_width() - LENGTH_BOX_WIDTH - ui.spacing().item_spacing.x;
-            let default_length = Self::default().char_length;
+            let default_length = CharacterSettings::default().length;
             let slider = ui
-                .add(egui::Slider::new(&mut self.char_length, MIN_LENGTH..=MAX_LENGTH).show_value(false))
+                .add(egui::Slider::new(&mut self.config.characters.length, MIN_LENGTH..=MAX_LENGTH).show_value(false))
                 .on_hover_text(format!("Double-click to reset to {}", default_length));
             // The slider only senses drags, so detect the double-click from raw input.
             let double_clicked = ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
             if double_clicked && ui.rect_contains_pointer(slider.rect) {
-                self.char_length = default_length;
+                self.config.characters.length = default_length;
             }
 
             let length_box = ui.add(
@@ -152,14 +145,14 @@ impl PassGenApp {
             // clamped or reverted once the box loses focus (Enter, Tab or clicking away).
             if let Ok(typed) = self.char_length_input.trim().parse::<usize>() {
                 if length_box.changed() && (MIN_LENGTH..=MAX_LENGTH).contains(&typed) {
-                    self.char_length = typed;
+                    self.config.characters.length = typed;
                 }
                 if length_box.lost_focus() {
-                    self.char_length = typed.clamp(MIN_LENGTH, MAX_LENGTH);
+                    self.config.characters.length = typed.clamp(MIN_LENGTH, MAX_LENGTH);
                 }
             }
             if !length_box.has_focus() {
-                self.char_length_input = self.char_length.to_string();
+                self.char_length_input = self.config.characters.length.to_string();
             }
         });
 
@@ -196,21 +189,21 @@ impl PassGenApp {
         ui.horizontal(|ui| {
             ui.label("Number of words:");
             for count in MIN_WORDS..=MAX_WORDS {
-                ui.radio_value(&mut self.word_count, count, count.to_string());
+                ui.radio_value(&mut self.config.words.count, count, count.to_string());
             }
         });
         ui.add_space(PADDING);
 
-        ui.checkbox(&mut self.use_uppercase_words, "Uppercase first character of words");
-        ui.checkbox(&mut self.include_number, "Include a number")
+        ui.checkbox(&mut self.config.words.capitalize, "Uppercase first character of words");
+        ui.checkbox(&mut self.config.words.include_number, "Include a number")
             .on_hover_text("Adds a two-digit number at a random position, e.g. Mango-42-Otter-Kettle-Robin");
         ui.horizontal(|ui| {
-            ui.checkbox(&mut self.use_separator, "Separator character:");
-            ui.add_enabled_ui(self.use_separator, |ui| {
-                let response = ui.add(egui::TextEdit::singleline(&mut self.separator_char).desired_width(30.0));
+            ui.checkbox(&mut self.config.words.use_separator, "Separator character:");
+            ui.add_enabled_ui(self.config.words.use_separator, |ui| {
+                let response = ui.add(egui::TextEdit::singleline(&mut self.config.words.separator).desired_width(30.0));
                 if response.changed() {
-                    if self.separator_char.chars().count() > 1 {
-                        self.separator_char = self.separator_char.chars().next().unwrap_or_default().to_string();
+                    if self.config.words.separator.chars().count() > 1 {
+                        self.config.words.separator = self.config.words.separator.chars().next().unwrap_or_default().to_string();
                     }
                 }
             });
@@ -309,8 +302,8 @@ impl PassGenApp {
                 ui.heading("Visuals");
                 ui.label("Color Scheme:");
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.theme, Theme::Light, "Light");
-                    ui.radio_value(&mut self.theme, Theme::Dark, "Dark");
+                    ui.radio_value(&mut self.config.theme, Theme::Light, "Light");
+                    ui.radio_value(&mut self.config.theme, Theme::Dark, "Dark");
                 });
 
                 ui.add_space(PADDING);
@@ -320,8 +313,8 @@ impl PassGenApp {
                 ui.heading("Startup");
                 ui.label("Default tab:");
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.default_tab, Tab::Character, "Characters");
-                    ui.radio_value(&mut self.default_tab, Tab::Word, "Words");
+                    ui.radio_value(&mut self.config.default_tab, Tab::Character, "Characters");
+                    ui.radio_value(&mut self.config.default_tab, Tab::Word, "Words");
                 });
 
                 ui.add_space(PADDING);
@@ -338,7 +331,7 @@ impl PassGenApp {
                 );
                 if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     let new_path = PathBuf::from(self.words_file_path_str.trim());
-                    if new_path != self.words_file_path {
+                    if new_path != self.config.words_file_path {
                         self.set_wordlist(new_path);
                     }
                 }
@@ -349,7 +342,7 @@ impl PassGenApp {
                             self.set_wordlist(path);
                         }
                     }
-                    let using_custom = !self.words_file_path.as_os_str().is_empty();
+                    let using_custom = !self.config.words_file_path.as_os_str().is_empty();
                     if ui.add_enabled(using_custom, egui::Button::new("Use Built-in List")).clicked() {
                         self.set_wordlist(PathBuf::new());
                     }
@@ -415,24 +408,10 @@ impl PassGenApp {
     fn generate(&mut self, tab: Tab) -> Result<(), String> {
         match tab {
             Tab::Character => {
-                self.char_password_output = generate_char_password(
-                    self.char_length,
-                    &self.char_sets,
-                    self.use_lowercase,
-                    self.use_uppercase,
-                    self.use_numbers,
-                    self.use_special,
-                )?;
+                self.char_password_output = generate_char_password(&self.config.characters)?;
             }
             Tab::Word => {
-                self.word_password_output = generate_word_password(
-                    self.word_count,
-                    &self.words,
-                    self.use_separator,
-                    &self.separator_char,
-                    self.use_uppercase_words,
-                    self.include_number,
-                )?;
+                self.word_password_output = generate_word_password(&self.config.words, &self.words)?;
             }
         }
         Ok(())
@@ -442,8 +421,8 @@ impl PassGenApp {
     /// generates a fresh passphrase from it.
     fn set_wordlist(&mut self, path: PathBuf) {
         self.words_file_path_str = path.to_string_lossy().to_string();
-        self.words_file_path = path;
-        let (words, status) = load_words(&self.words_file_path);
+        self.config.words_file_path = path;
+        let (words, status) = load_words(&self.config.words_file_path);
         self.words = words;
         self.status_message = status;
         if let Err(e) = self.generate(Tab::Word) {
