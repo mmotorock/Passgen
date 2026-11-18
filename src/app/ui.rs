@@ -22,6 +22,9 @@ const SIZE_BOX_WIDTH: f32 = 40.0;
 const COPY_BUTTON_SIZE: egui::Vec2 = egui::vec2(26.0, 22.0);
 const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(120);
 const COPIED_FLASH_DURATION: Duration = Duration::from_millis(1500);
+/// After copying, the copied text is highlighted like a selection for this long, then fades out.
+const HIGHLIGHT_HOLD: Duration = Duration::from_millis(300);
+const HIGHLIGHT_FADE: Duration = Duration::from_millis(300);
 
 impl eframe::App for PassGenApp {
     /// Called each frame to draw the GUI.
@@ -223,12 +226,18 @@ impl PassGenApp {
     fn draw_output(&mut self, ui: &mut egui::Ui, password: &str) {
         let copied = self.was_just_copied(ui.ctx(), password);
         let success = self.theme().success;
+        let highlight = self.highlight_strength(ui.ctx(), password);
         ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut &*password)
-                    .font(egui::FontId::monospace(20.0))
-                    .desired_width(ui.available_width() - 60.0),
-            );
+            let field = egui::TextEdit::singleline(&mut &*password)
+                .font(egui::FontId::monospace(20.0))
+                .desired_width(ui.available_width() - 60.0)
+                .show(ui);
+            if let Some(strength) = highlight {
+                let text_rect = field.galley.rect.translate(field.galley_pos.to_vec2());
+                paint_highlight(ui, text_rect, field.text_clip_rect, strength, |painter, color| {
+                    painter.galley_with_override_text_color(field.galley_pos, field.galley.clone(), color);
+                });
+            }
             if ui.add(copy_button(copied, success)).on_hover_text("Shortcut: Ctrl+C").clicked() {
                 self.copy_output(ui.ctx());
             }
@@ -276,8 +285,14 @@ impl PassGenApp {
                 "•".repeat(entry.password.chars().count().min(24))
             };
             let password_rect = row_ui
-                .add(egui::Label::new(egui::RichText::new(shown).monospace()).extend())
+                .add(egui::Label::new(egui::RichText::new(&shown).monospace()).extend())
                 .rect;
+            if let Some(strength) = self.highlight_strength(ui.ctx(), &entry.password) {
+                let font = egui::TextStyle::Monospace.resolve(ui.style());
+                paint_highlight(&row_ui, password_rect, text_area, strength, |painter, color| {
+                    painter.text(password_rect.left_center(), egui::Align2::LEFT_CENTER, &shown, font, color);
+                });
+            }
 
             // Sit right after the password, but never past the edge of the row:
             // a long password slides underneath the button instead.
@@ -494,6 +509,19 @@ impl PassGenApp {
         true
     }
 
+    /// How strongly to highlight `password` because it was just copied: 1 at first, fading to
+    /// nothing, or `None` once the highlight is over (or something else was copied).
+    fn highlight_strength(&self, ctx: &egui::Context, password: &str) -> Option<f32> {
+        let (copied_at, copied) = self.copied_flash.as_ref()?;
+        let elapsed = copied_at.elapsed();
+        if copied != password || elapsed >= HIGHLIGHT_HOLD + HIGHLIGHT_FADE {
+            return None;
+        }
+        ctx.request_repaint(); // Keep animating until the highlight is gone
+        let fading_for = elapsed.saturating_sub(HIGHLIGHT_HOLD).as_secs_f32();
+        Some(1.0 - fading_for / HIGHLIGHT_FADE.as_secs_f32())
+    }
+
     /// Clears the clipboard once the timer runs out, unless something else was copied since.
     fn clear_clipboard_when_due(&mut self, ctx: &egui::Context) {
         let Some((due, copied)) = &self.clipboard_clear_at else {
@@ -532,6 +560,22 @@ impl PassGenApp {
             self.copy_output(ctx);
         }
     }
+}
+
+/// Highlights text the way a selection looks: the theme's selection colour behind it and its
+/// selected-text colour for the text, which `draw_text` paints again on top. `strength` (0 to 1)
+/// fades both out, revealing the normal text underneath.
+fn paint_highlight(
+    ui: &egui::Ui,
+    text_rect: egui::Rect,
+    clip_rect: egui::Rect,
+    strength: f32,
+    draw_text: impl FnOnce(&egui::Painter, egui::Color32),
+) {
+    let painter = ui.painter().with_clip_rect(clip_rect.intersect(ui.clip_rect()));
+    let selection = ui.visuals().selection;
+    painter.rect_filled(text_rect.expand2(egui::vec2(3.0, 1.0)), 2.0, selection.bg_fill.gamma_multiply(strength));
+    draw_text(&painter, selection.stroke.color.gamma_multiply(strength));
 }
 
 /// Opens `dir` in the system's file manager, returning a status message.
