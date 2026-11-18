@@ -19,13 +19,14 @@ Passgen is a versatile, secure password and passphrase generator built with Rust
     -   Customize capitalization and the separator character.
     -   Use your own wordlist (one word per line) by choosing it in the settings.
 -   **Password History:**
-    -   The last 5 generated passwords (GUI and CLI) are listed at the bottom of the window, hidden until you tick "Show", each with a Copy button.
+    -   The last 5 generated passwords (GUI and CLI) are listed under the generated password, hidden until you tick "Show", each with a Copy button.
     -   The history is stored encrypted (ChaCha20-Poly1305) in `history.dat`. The key is kept in the operating system's keyring (Windows Credential Manager, GNOME Keyring/KWallet on Linux, Keychain on macOS), so the file alone is useless to anyone who copies it.
     -   If no keyring is available, the history is kept for the current session only.
 -   **Quick to Use:**
     -   A password is ready as soon as the app opens.
     -   Generating a password copies it to the clipboard automatically. The clipboard is cleared after 2 minutes (only if it still holds that password).
     -   Keyboard shortcuts: `Space` generates a new password, `Ctrl+C` copies the one on screen.
+    -   Settings that can't produce a password (e.g. no character set selected) are explained right under the Generate button.
 -   **Full Configuration:**
     -   All settings are saved automatically to a `config.toml` file as you change them.
     -   Choose which tab (Characters or Words) the app opens on.
@@ -64,6 +65,26 @@ To build this project from the source, you will need:
 4.  **Run the application:**
     -   The final executable will be located in the `target/release/` directory.
     -   On Windows, this will be `Passgen.exe`.
+
+### Installing on Linux
+
+To install Passgen for your user, with a launcher in the app menu and its icon in the dock, run:
+
+```bash
+packaging/linux/install.sh
+```
+
+This builds a release version and installs:
+
+| File | Purpose |
+|---|---|
+| `~/.local/bin/passgen` | The program (add `~/.local/bin` to your `PATH` to run `passgen` in a terminal) |
+| `~/.local/share/applications/passgen.desktop` | App menu launcher |
+| `~/.local/share/icons/hicolor/128x128/apps/passgen.png` | Icon |
+
+Run it again after pulling changes to update. To uninstall, run `packaging/linux/install.sh --remove` (your settings and history are kept).
+
+On Wayland desktops such as GNOME, an app can't set its own window icon: the dock finds the icon through the installed `passgen.desktop` file, which matches the app's ID (`passgen`). Without installing it, Passgen shows a generic icon.
 
 ## Usage
 
@@ -104,19 +125,60 @@ Missing or invalid entries fall back to their defaults (and are reported in the 
 
 ### Command-Line Mode (CLI)
 
-You can also run the application from your terminal to quickly generate and copy a password. The CLI uses the same saved settings as the GUI (character sets, wordlist, separator, number option); only the length or word count comes from the command line.
+Run Passgen with `-n` (character password) or `-w` (passphrase) to use it from a terminal or a script. The result is printed, copied to the clipboard and added to the history, just like in the GUI.
 
--   **Generate a 16-character password:**
-    ```bash
-    ./Passgen -n 16
-    ```
+The CLI uses the **settings saved by the GUI** (character sets, wordlist, separator, capitalization, number option). The options below override them for a single run; nothing is saved.
 
--   **Generate a 4-word passphrase:**
-    ```bash
-    ./Passgen -w 4
-    ```
+```text
+passgen -n <LENGTH> [OPTIONS]     a character password, 12 to 256 characters
+passgen -w <COUNT>  [OPTIONS]     a passphrase, 3 to 8 words
+```
 
--   **View the help manual:**
-    ```bash
-    ./Passgen --help
-    ```
+(When running from the build folder instead of an installed copy, use `./target/release/Passgen`, or `Passgen.exe` on Windows.)
+
+#### General options
+
+| Option | Description |
+|---|---|
+| `-n`, `--length <LENGTH>` | Generate a character password of this length (12 to 256) |
+| `-w`, `--words <COUNT>` | Generate a passphrase with this many words (3 to 8) |
+| `-c`, `--count <N>` | Generate N results (1 to 100), one per line. All of them are copied and added to the history. |
+| `--no-copy` | Don't copy the result to the clipboard |
+| `--no-history` | Don't add the result to the history |
+| `-h`, `--help` | Show all options |
+| `-V`, `--version` | Show the version |
+
+#### Character password options (with `-n`)
+
+| Option | Description |
+|---|---|
+| `--no-lowercase` | Leave out lowercase letters |
+| `--no-uppercase` | Leave out uppercase letters |
+| `--no-numbers` | Leave out numbers |
+| `--no-special` | Leave out special characters |
+
+These only turn sets off: a set that is turned off in the settings stays off. The characters in each set come from the settings.
+
+#### Passphrase options (with `-w`)
+
+| Option | Description |
+|---|---|
+| `--separator <CHAR>` | Put this character between words |
+| `--no-separator` | Join the words without a separator |
+| `--number` / `--no-number` | Insert, or don't insert, a two-digit number at a random position |
+| `--capitalize` / `--no-capitalize` | Start every word with an uppercase letter, or keep them lowercase |
+| `--wordlist <FILE>` | Use this wordlist (one word per line) instead of the saved one |
+
+#### Examples
+
+```bash
+passgen -n 16                          # one 16-character password
+passgen -n 20 --no-special             # letters and numbers only
+passgen -w 4 --number                  # e.g. Mango-42-Otter-Kettle-Robin
+passgen -w 5 --separator .             # e.g. Mango.Otter.Kettle.Robin.Tulip
+passgen -w 4 --no-separator --no-capitalize   # e.g. mangootterkettlerobin
+passgen -n 16 -c 10 --no-copy          # print ten passwords, don't touch the clipboard
+passgen -n 16 --no-copy --no-history   # for scripts: just print it
+```
+
+The password is written to standard output and messages (such as "Copied to clipboard.") to standard error, so `PASSWORD=$(passgen -n 16 --no-copy)` captures only the password. Passgen exits with status 0 on success, 1 if no password could be generated (for example, all character sets turned off, or the wordlist can't be read) and 2 for invalid options.

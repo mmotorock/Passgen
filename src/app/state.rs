@@ -47,19 +47,83 @@ impl FromStr for Tab {
 #[derive(Parser, Debug)]
 #[command(
     version,
-    about = "A versatile password and passphrase generator.",
+    about = "A password and passphrase generator.",
     long_about = "Generates strong, random passwords or memorable passphrases.\n\n\
-                  Run without arguments to launch the GUI.\n\
-                  Use either -n for character-based passwords or -w for word-based passphrases in CLI mode."
+                  Run without arguments to launch the GUI. With -n or -w it works on the command line instead, \
+                  using the settings saved by the GUI; the options below override them for one run.",
+    after_help = "Examples:\n  \
+                  passgen -n 16                    one 16-character password\n  \
+                  passgen -n 20 --no-special       letters and numbers only\n  \
+                  passgen -w 4 --number            e.g. Mango-42-Otter-Kettle-Robin\n  \
+                  passgen -w 5 --separator .       e.g. Mango.Otter.Kettle.Robin.Tulip\n  \
+                  passgen -n 16 -c 10 --no-copy    print ten passwords, don't touch the clipboard"
 )]
 pub struct CliArgs {
-    /// Generates a character-based password of a specific length (12 to 256), using the saved settings.
-    #[arg(short, long, group = "mode")]
-    pub n: Option<usize>,
+    /// Generate a character password of this length (12 to 256)
+    #[arg(short = 'n', long = "length", value_name = "LENGTH", group = "mode")]
+    pub length: Option<usize>,
 
-    /// Generates a word-based passphrase with a specific number of words (3 to 8), using the saved settings.
-    #[arg(short, long, group = "mode", value_name = "COUNT")]
-    pub w: Option<usize>,
+    /// Generate a passphrase with this many words (3 to 8)
+    #[arg(short = 'w', long = "words", value_name = "COUNT", group = "mode")]
+    pub words: Option<usize>,
+
+    /// How many to generate, one per line
+    #[arg(short = 'c', long, value_name = "N", default_value_t = 1, requires = "mode",
+          value_parser = clap::value_parser!(u32).range(1..=100))]
+    pub count: u32,
+
+    /// Don't copy the result to the clipboard
+    #[arg(long, requires = "mode")]
+    pub no_copy: bool,
+
+    /// Don't add the result to the history
+    #[arg(long, requires = "mode")]
+    pub no_history: bool,
+
+    /// Leave out lowercase letters
+    #[arg(long, requires = "mode", conflicts_with = "words", help_heading = "Character passwords (-n)")]
+    pub no_lowercase: bool,
+
+    /// Leave out uppercase letters
+    #[arg(long, requires = "mode", conflicts_with = "words", help_heading = "Character passwords (-n)")]
+    pub no_uppercase: bool,
+
+    /// Leave out numbers
+    #[arg(long, requires = "mode", conflicts_with = "words", help_heading = "Character passwords (-n)")]
+    pub no_numbers: bool,
+
+    /// Leave out special characters
+    #[arg(long, requires = "mode", conflicts_with = "words", help_heading = "Character passwords (-n)")]
+    pub no_special: bool,
+
+    /// Put this character between words
+    #[arg(long, value_name = "CHAR", requires = "mode", conflicts_with_all = ["length", "no_separator"],
+          help_heading = "Passphrases (-w)")]
+    pub separator: Option<char>,
+
+    /// Join the words without a separator
+    #[arg(long, requires = "mode", conflicts_with = "length", help_heading = "Passphrases (-w)")]
+    pub no_separator: bool,
+
+    /// Insert a two-digit number at a random position
+    #[arg(long, requires = "mode", conflicts_with_all = ["length", "no_number"], help_heading = "Passphrases (-w)")]
+    pub number: bool,
+
+    /// Don't insert a number
+    #[arg(long, requires = "mode", conflicts_with = "length", help_heading = "Passphrases (-w)")]
+    pub no_number: bool,
+
+    /// Start every word with an uppercase letter
+    #[arg(long, requires = "mode", conflicts_with_all = ["length", "no_capitalize"], help_heading = "Passphrases (-w)")]
+    pub capitalize: bool,
+
+    /// Keep every word in lowercase
+    #[arg(long, requires = "mode", conflicts_with = "length", help_heading = "Passphrases (-w)")]
+    pub no_capitalize: bool,
+
+    /// Use this wordlist (one word per line) instead of the saved one
+    #[arg(long, value_name = "FILE", requires = "mode", conflicts_with = "length", help_heading = "Passphrases (-w)")]
+    pub wordlist: Option<PathBuf>,
 }
 
 /// The main application state for the GUI.
@@ -70,8 +134,9 @@ pub struct PassGenApp {
     pub config_path: PathBuf,
     pub show_settings_window: bool,
     pub fitted_height: f32, // Window height last fitted to the content (0 before the first fit)
-    pub error_message: Option<String>, // For the error dialog
+    pub generate_error: Option<String>, // Why the last generation failed, shown under the button
     pub clipboard_clear_at: Option<(Instant, String)>, // When to clear the clipboard, and what we copied
+    pub copied_flash: Option<(Instant, String)>, // When something was copied, for the ✓ on its button
 
     // Settings, and the version last written to config.toml
     pub config: Config,
@@ -84,6 +149,7 @@ pub struct PassGenApp {
 
     // Word generator state
     pub words: Vec<String>,
+    pub wordlist_status: String, // Result of loading the wordlist, shown if it failed
     pub word_password_output: String,
 
     // Recently generated passwords
@@ -100,14 +166,16 @@ impl Default for PassGenApp {
             config_path: PathBuf::new(),
             show_settings_window: false,
             fitted_height: 0.0,
-            error_message: None,
+            generate_error: None,
             clipboard_clear_at: None,
+            copied_flash: None,
             config: Config::default(),
             saved_config: Config::default(),
             words_file_path_str: String::new(),
             char_length_input: String::new(),
             char_password_output: String::new(),
             words: Vec::new(),
+            wordlist_status: String::new(),
             word_password_output: String::new(),
             history: History::default(),
             show_history: false,
@@ -123,7 +191,7 @@ impl PassGenApp {
         let (config, mut messages) = Config::load(&config_path);
         let (words, word_status) = load_words(&config.words_file_path);
         let (history, history_warning) = History::load(app_dir.join("history.dat"));
-        messages.push(word_status);
+        messages.push(word_status.clone());
         messages.extend(history_warning);
 
         Self {
@@ -134,6 +202,7 @@ impl PassGenApp {
             saved_config: config.clone(),
             config,
             words,
+            wordlist_status: word_status,
             history,
             ..Self::default()
         }

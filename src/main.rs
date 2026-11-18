@@ -6,20 +6,20 @@
 
 mod app;
 
-use crate::app::cli::{run_char_cli_mode, run_word_cli_mode};
+use crate::app::cli::run_cli;
 use crate::app::state::CliArgs;
 use crate::app::ui::run_gui_mode;
 use clap::Parser;
+use std::process::ExitCode;
 
 /// The main entry point of the application.
-fn main() {
+fn main() -> ExitCode {
     let args = CliArgs::parse();
 
-    if let Some(length) = args.n {
-        run_char_cli_mode(length);
-    } else if let Some(count) = args.w {
-        run_word_cli_mode(count);
+    if args.length.is_some() || args.words.is_some() {
+        run_cli(&args)
     } else {
         run_gui_mode();
+        ExitCode::SUCCESS
     }
 }

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Passgen
+GenericName=Password Generator
+Comment=Generate strong passwords and memorable passphrases
+Exec=@EXEC@
+Icon=passgen
+Terminal=false
+Categories=Utility;
+Keywords=password;passphrase;generator;
+StartupWMClass=passgen

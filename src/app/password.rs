@@ -13,18 +13,11 @@ pub const MAX_LENGTH: usize = 256;
 /// No character appears twice in a row, and no character appears more than
 /// `max_repeats_for` times, so passwords of any length can be generated.
 pub fn generate_char_password(settings: &CharacterSettings) -> Result<String, String> {
+    if let Some(problem) = char_settings_problem(settings) {
+        return Err(problem);
+    }
     let length = settings.length;
     let selected_sets = selected_sets(settings);
-
-    if selected_sets.is_empty() {
-        return Err("You must select at least one character set.".to_string());
-    }
-    if length < selected_sets.len() {
-        return Err(format!(
-            "Password length must be at least {} to include one of each selected type.",
-            selected_sets.len()
-        ));
-    }
 
     let pool = character_pool(&selected_sets);
     let max_repeats = max_repeats_for(length, pool.len());
@@ -43,6 +36,26 @@ pub fn generate_char_password(settings: &CharacterSettings) -> Result<String, St
     }
 
     Err("Failed to generate a valid password after multiple attempts. Try adding more characters to the sets.".to_string())
+}
+
+/// Explains why no password can be generated with these settings, if that's the case.
+pub fn char_settings_problem(settings: &CharacterSettings) -> Option<String> {
+    let sets = [
+        ("Lowercase", settings.use_lowercase, &settings.lowercase),
+        ("Uppercase", settings.use_uppercase, &settings.uppercase),
+        ("Numbers", settings.use_numbers, &settings.numbers),
+        ("Special", settings.use_special, &settings.special),
+    ];
+    if !sets.iter().any(|(_, enabled, _)| *enabled) {
+        return Some("Select at least one character set.".to_string());
+    }
+    if let Some((name, _, _)) = sets.iter().find(|(_, enabled, chars)| *enabled && chars.is_empty()) {
+        return Some(format!("{} is ticked but has no characters.", name));
+    }
+    if !(MIN_LENGTH..=MAX_LENGTH).contains(&settings.length) {
+        return Some(format!("Length must be between {} and {}.", MIN_LENGTH, MAX_LENGTH));
+    }
+    None
 }
 
 /// The enabled, non-empty character sets.
@@ -105,17 +118,10 @@ const PASSPHRASE_NUMBERS: std::ops::RangeInclusive<u32> = 10..=99;
 /// Generates a passphrase from a list of words, respecting length constraints.
 /// With `include_number`, a two-digit number is inserted at a random position.
 pub fn generate_word_password(settings: &WordSettings, words: &[String]) -> Result<String, String> {
+    if let Some(problem) = word_settings_problem(settings, words.len()) {
+        return Err(problem);
+    }
     let count = settings.count;
-    if !(MIN_WORDS..=MAX_WORDS).contains(&count) {
-        return Err(format!("Word count must be between {} and {}.", MIN_WORDS, MAX_WORDS));
-    }
-    if words.len() < count {
-        return Err(format!(
-            "Not enough words in the wordlist (found {}, need at least {}).",
-            words.len(),
-            count
-        ));
-    }
 
     // Keeps passphrases from unusually long custom wordlists manageable;
     // the built-in list never comes close to this.
@@ -157,6 +163,21 @@ pub fn generate_word_password(settings: &WordSettings, words: &[String]) -> Resu
         "Could not generate a passphrase under {} characters. Check the wordlist for long words.",
         max_length
     ))
+}
+
+/// Explains why no passphrase can be generated with these settings and wordlist size, if that's the case.
+pub fn word_settings_problem(settings: &WordSettings, wordlist_size: usize) -> Option<String> {
+    if !(MIN_WORDS..=MAX_WORDS).contains(&settings.count) {
+        return Some(format!("Word count must be between {} and {}.", MIN_WORDS, MAX_WORDS));
+    }
+    match wordlist_size {
+        0 => Some("The wordlist is empty or could not be loaded.".to_string()),
+        size if size < settings.count => Some(format!(
+            "The wordlist has only {} words, but {} are needed.",
+            size, settings.count
+        )),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -271,6 +292,19 @@ mod tests {
     fn passphrase_rejects_bad_word_counts() {
         assert!(generate_word_password(&words(MIN_WORDS - 1, true, false), &wordlist()).is_err());
         assert!(generate_word_password(&words(MAX_WORDS + 1, true, false), &wordlist()).is_err());
+    }
+
+    #[test]
+    fn explains_unusable_settings() {
+        let empty_set = CharacterSettings { uppercase: String::new(), ..Default::default() };
+        assert_eq!(char_settings_problem(&empty_set).unwrap(), "Uppercase is ticked but has no characters.");
+        let unticked_empty = CharacterSettings { use_uppercase: false, ..empty_set };
+        assert_eq!(char_settings_problem(&unticked_empty), None);
+        assert_eq!(char_settings_problem(&CharacterSettings::default()), None);
+
+        assert!(word_settings_problem(&words(4, true, false), 0).unwrap().contains("empty"));
+        assert!(word_settings_problem(&words(4, true, false), 3).unwrap().contains("only 3 words"));
+        assert_eq!(word_settings_problem(&words(4, true, false), 935), None);
     }
 
     #[test]
