@@ -1,0 +1,37 @@
+# Passgen theme. Copy this file under a new name in the themes folder to make your own;
+# the file name (without .toml) is the theme's ID in config.toml.
+#
+# Every colour is optional and written as "#rrggbb" (or "#rrggbbaa"). A missing one keeps
+# the colour of egui's built-in light or dark theme, chosen by `dark`.
+#
+#   background     window and panel background
+#   surface        text fields and other recessed areas
+#   text           normal text and icons
+#   weak_text      descriptions, timestamps and hints
+#   strong_text    text on buttons while pressed, headings
+#   widget         buttons, checkboxes, sliders
+#   widget_hover   the same, under the mouse
+#   widget_active  the same, while pressed
+#   border         separators and outlines
+#   accent         the selected style button, selected text, slider fill
+#   accent_text    text drawn on the accent colour
+#   error          warnings under the Generate button
+#   success        the check mark after copying
+
+name = "Nord"
+dark = true
+
+[colors]
+background    = "#2e3440"
+surface       = "#272c36"
+text          = "#d8dee9"
+weak_text     = "#8a93a5"
+strong_text   = "#eceff4"
+widget        = "#3b4252"
+widget_hover  = "#434c5e"
+widget_active = "#4c566a"
+border        = "#3b4252"
+accent        = "#88c0d0"
+accent_text   = "#2e3440"
+error         = "#bf616a"
+success       = "#a3be8c"

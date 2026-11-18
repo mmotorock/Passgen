@@ -5,5 +5,6 @@ pub mod history;
 pub mod password;
 pub mod state;
 pub mod styles;
+pub mod themes;
 pub mod ui;
 pub mod utils;

@@ -1,0 +1,37 @@
+# Passgen theme. Copy this file under a new name in the themes folder to make your own;
+# the file name (without .toml) is the theme's ID in config.toml.
+#
+# Every colour is optional and written as "#rrggbb" (or "#rrggbbaa"). A missing one keeps
+# the colour of egui's built-in light or dark theme, chosen by `dark`.
+#
+#   background     window and panel background
+#   surface        text fields and other recessed areas
+#   text           normal text and icons
+#   weak_text      descriptions, timestamps and hints
+#   strong_text    text on buttons while pressed, headings
+#   widget         buttons, checkboxes, sliders
+#   widget_hover   the same, under the mouse
+#   widget_active  the same, while pressed
+#   border         separators and outlines
+#   accent         the selected style button, selected text, slider fill
+#   accent_text    text drawn on the accent colour
+#   error          warnings under the Generate button
+#   success        the check mark after copying
+
+name = "Solarized Dark"
+dark = true
+
+[colors]
+background    = "#002b36"
+surface       = "#00212b"
+text          = "#93a1a1"
+weak_text     = "#657b83"
+strong_text   = "#eee8d5"
+widget        = "#073642"
+widget_hover  = "#0b4655"
+widget_active = "#586e75"
+border        = "#073642"
+accent        = "#268bd2"
+accent_text   = "#fdf6e3"
+error         = "#dc322f"
+success       = "#859900"

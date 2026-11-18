@@ -1,0 +1,37 @@
+# Passgen theme. Copy this file under a new name in the themes folder to make your own;
+# the file name (without .toml) is the theme's ID in config.toml.
+#
+# Every colour is optional and written as "#rrggbb" (or "#rrggbbaa"). A missing one keeps
+# the colour of egui's built-in light or dark theme, chosen by `dark`.
+#
+#   background     window and panel background
+#   surface        text fields and other recessed areas
+#   text           normal text and icons
+#   weak_text      descriptions, timestamps and hints
+#   strong_text    text on buttons while pressed, headings
+#   widget         buttons, checkboxes, sliders
+#   widget_hover   the same, under the mouse
+#   widget_active  the same, while pressed
+#   border         separators and outlines
+#   accent         the selected style button, selected text, slider fill
+#   accent_text    text drawn on the accent colour
+#   error          warnings under the Generate button
+#   success        the check mark after copying
+
+name = "Gruvbox Dark"
+dark = true
+
+[colors]
+background    = "#282828"
+surface       = "#1d2021"
+text          = "#ebdbb2"
+weak_text     = "#a89984"
+strong_text   = "#fbf1c7"
+widget        = "#3c3836"
+widget_hover  = "#504945"
+widget_active = "#665c54"
+border        = "#504945"
+accent        = "#d79921"
+accent_text   = "#282828"
+error         = "#fb4934"
+success       = "#b8bb26"

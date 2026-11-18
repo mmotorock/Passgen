@@ -38,7 +38,7 @@ Passgen is a versatile, secure password and passphrase generator built with Rust
     -   All settings are saved automatically to a `config.toml` file as you change them.
     -   Choose which style the app opens on.
     -   Custom wordlists can be used by changing the path in the settings.
-    -   Supports both Light and Dark themes.
+    -   Colour themes: Light and Dark, plus Gruvbox Dark/Light, Solarized Dark/Light and Nord out of the box. Add your own by dropping a `.toml` file in the themes folder.
 -   **Cross-Platform:** Built with Rust, it compiles to a single, native executable.
 -   **Secure:** Uses the `rand` crate for cryptographically secure random number generation.
 
@@ -111,7 +111,7 @@ The word generator uses its built-in list unless you choose a custom wordlist in
 `config.toml` is a standard TOML file, so it can be edited by hand while the app is closed:
 
 ```toml
-theme = "Dark"                # "Dark" or "Light"
+theme = "nord"                # "light", "dark" or a file name from the themes folder
 default_style = "Segmented"   # Random, Segmented, Grouped, Pronounceable, Pin or Words
 words_file_path = ""          # empty = built-in wordlist
 
@@ -142,6 +142,44 @@ include_number = false
 ```
 
 Missing or invalid entries fall back to their defaults (and are reported in the status bar). Config files from earlier versions are converted automatically, keeping the original as `config.toml.bak`.
+
+### Themes
+
+Pick a colour scheme in **Settings → Color scheme**. Besides egui's built-in **Light** and **Dark**, Passgen reads every `.toml` file in the `themes` folder inside the config folder (`~/.config/passgen/themes/` on Linux, `config\themes\` next to `Passgen.exe` on Windows). The first time it runs, it puts these there:
+
+| Theme | File |
+|---|---|
+| Gruvbox Dark | `gruvbox-dark.toml` |
+| Gruvbox Light | `gruvbox-light.toml` |
+| Nord | `nord.toml` |
+| Solarized Dark | `solarized-dark.toml` |
+| Solarized Light | `solarized-light.toml` |
+
+They are only created when the folder doesn't exist yet, so you can edit or delete them freely. The originals are in the [`themes/`](themes/) folder of this repository.
+
+To make your own theme, copy one of the files under a new name and change the colours. **Settings → Open Themes Folder** opens the folder, and **Reload Themes** picks up your changes without restarting. The file name (without `.toml`) is the theme's ID; a file named `light.toml` or `dark.toml` replaces that built-in theme.
+
+```toml
+name = "My Theme"      # shown in the settings (defaults to the file name)
+dark = true            # start from egui's dark (true) or light (false) theme
+
+[colors]               # all optional, as "#rrggbb" or "#rrggbbaa"
+background    = "#2e3440"   # window and panel background
+surface       = "#272c36"   # text fields and other recessed areas
+text          = "#d8dee9"   # normal text and icons
+weak_text     = "#8a93a5"   # descriptions, timestamps and hints
+strong_text   = "#eceff4"   # text on buttons while pressed, headings
+widget        = "#3b4252"   # buttons, checkboxes, sliders
+widget_hover  = "#434c5e"   # the same, under the mouse
+widget_active = "#4c566a"   # the same, while pressed
+border        = "#3b4252"   # separators and outlines
+accent        = "#88c0d0"   # the selected style button, selected text
+accent_text   = "#2e3440"   # text drawn on the accent colour
+error         = "#bf616a"   # warnings under the Generate button
+success       = "#a3be8c"   # the check mark after copying
+```
+
+A theme file with a mistake (such as a misspelt colour name or a colour that isn't `#rrggbb`) is skipped, and the status bar says why. If the selected theme's file is removed, Passgen falls back to Dark.
 
 ### Command-Line Mode (CLI)
 

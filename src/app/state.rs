@@ -1,5 +1,6 @@
 use crate::app::config::{Config, CONFIG_FILE};
 use crate::app::history::History;
+use crate::app::themes::{self, Theme};
 use crate::app::utils::{get_config_directory, load_words};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -7,24 +8,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Instant;
-
-/// Defines the color scheme for the UI.
-#[derive(Debug, PartialEq, Clone, Copy, Serialize, Deserialize)]
-pub enum Theme {
-    Light,
-    Dark,
-}
-
-impl FromStr for Theme {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Light" => Ok(Theme::Light),
-            "Dark" => Ok(Theme::Dark),
-            _ => Err(()),
-        }
-    }
-}
 
 /// The kinds of password Passgen can generate. Each has its own options in the GUI.
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, Serialize, Deserialize, clap::ValueEnum)]
@@ -201,6 +184,7 @@ pub struct PassGenApp {
     // Settings, and the version last written to config.toml
     pub config: Config,
     pub saved_config: Config,
+    pub themes: Vec<Theme>, // Built-in themes and those in the themes folder
     pub words_file_path_str: String, // Text in the wordlist path box while it is being edited
 
     // Generator state
@@ -228,6 +212,7 @@ impl Default for PassGenApp {
             copied_flash: None,
             config: Config::default(),
             saved_config: Config::default(),
+            themes: Vec::new(),
             words_file_path_str: String::new(),
             size_input: String::new(),
             outputs: HashMap::new(),
@@ -250,6 +235,14 @@ impl PassGenApp {
         messages.push(word_status.clone());
         messages.extend(history_warning);
 
+        let themes_dir = themes::themes_directory(&app_dir);
+        messages.extend(themes::create_default_themes(&themes_dir));
+        let (themes, theme_messages) = themes::load_themes(&themes_dir);
+        messages.extend(theme_messages);
+        if themes::find(&themes, &config.theme).is_none() {
+            messages.push(format!("Theme {:?} not found in the themes folder, using Dark.", config.theme));
+        }
+
         Self {
             active_style: config.default_style,
             status_message: messages.join("\n"),
@@ -257,6 +250,7 @@ impl PassGenApp {
             words_file_path_str: config.words_file_path.to_string_lossy().to_string(),
             saved_config: config.clone(),
             config,
+            themes,
             words,
             wordlist_status: word_status,
             history,

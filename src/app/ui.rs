@@ -1,8 +1,10 @@
 use crate::app::config::{CharacterSettings, Config, PinSettings, SegmentedSettings};
 use crate::app::history::MAX_ENTRIES;
 use crate::app::password::{MAX_LENGTH, MAX_WORDS, MIN_LENGTH, MIN_WORDS};
-use crate::app::state::{PassGenApp, Style, Theme};
+use crate::app::state::{PassGenApp, Style};
 use crate::app::styles::{self, GROUPS_RANGE, PIN_LENGTH_RANGE, PRONOUNCEABLE_GROUPS_RANGE};
+use crate::app::themes::{self, Theme};
+use crate::app::utils::get_config_directory;
 use crate::app::utils::{load_icon, load_words};
 use eframe::{egui, NativeOptions};
 use rfd::FileDialog;
@@ -20,18 +22,13 @@ const SIZE_BOX_WIDTH: f32 = 40.0;
 const COPY_BUTTON_SIZE: egui::Vec2 = egui::vec2(26.0, 22.0);
 const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(120);
 const COPIED_FLASH_DURATION: Duration = Duration::from_millis(1500);
-const COPIED_COLOR: egui::Color32 = egui::Color32::from_rgb(80, 180, 100);
 
 impl eframe::App for PassGenApp {
     /// Called each frame to draw the GUI.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
-        // Apply the selected theme
-        ctx.set_visuals(match self.config.theme {
-            Theme::Light => egui::Visuals::light(),
-            Theme::Dark => egui::Visuals::dark(),
-        });
+        ctx.set_visuals(self.theme().visuals);
 
         // Handled before any widget so Space doesn't also press a focused button.
         self.handle_shortcuts(&ctx);
@@ -47,7 +44,7 @@ impl eframe::App for PassGenApp {
                     if ui.button("Restore Defaults").clicked() {
                         // Keep the theme and wordlist; reset everything else.
                         self.config = Config {
-                            theme: self.config.theme,
+                            theme: self.config.theme.clone(),
                             words_file_path: self.config.words_file_path.clone(),
                             ..Config::default()
                         };
@@ -225,13 +222,14 @@ impl PassGenApp {
     /// Draws a generated password with its copy button.
     fn draw_output(&mut self, ui: &mut egui::Ui, password: &str) {
         let copied = self.was_just_copied(ui.ctx(), password);
+        let success = self.theme().success;
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut &*password)
                     .font(egui::FontId::monospace(20.0))
                     .desired_width(ui.available_width() - 60.0),
             );
-            if ui.add(copy_button(copied)).on_hover_text("Shortcut: Ctrl+C").clicked() {
+            if ui.add(copy_button(copied, success)).on_hover_text("Shortcut: Ctrl+C").clicked() {
                 self.copy_output(ui.ctx());
             }
         });
@@ -255,6 +253,7 @@ impl PassGenApp {
         }
 
         let mut copied = None;
+        let success = self.theme().success;
         let row_height = COPY_BUTTON_SIZE.y.max(ui.spacing().interact_size.y);
         for entry in &self.history.entries {
             let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), row_height), egui::Sense::hover());
@@ -288,7 +287,7 @@ impl PassGenApp {
                 COPY_BUTTON_SIZE,
             );
             let just_copied = self.was_just_copied(ui.ctx(), &entry.password);
-            if ui.put(button_rect, copy_button(just_copied)).clicked() {
+            if ui.put(button_rect, copy_button(just_copied, success)).clicked() {
                 copied = Some(entry.password.clone());
             }
         }
@@ -309,10 +308,24 @@ impl PassGenApp {
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
                 ui.heading("Visuals");
-                ui.label("Color Scheme:");
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.config.theme, Theme::Light, "Light");
-                    ui.radio_value(&mut self.config.theme, Theme::Dark, "Dark");
+                    ui.label("Color scheme:");
+                    egui::ComboBox::from_id_salt("theme")
+                        .selected_text(self.theme().name)
+                        .show_ui(ui, |ui| {
+                            for theme in &self.themes {
+                                ui.selectable_value(&mut self.config.theme, theme.id.clone(), &theme.name);
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    let dir = themes::themes_directory(&get_config_directory());
+                    if ui.button("Open Themes Folder").on_hover_text(dir.to_string_lossy()).clicked() {
+                        self.status_message = open_folder(&dir);
+                    }
+                    if ui.button("Reload Themes").on_hover_text("Pick up themes added or edited in the folder").clicked() {
+                        self.reload_themes();
+                    }
                 });
 
                 ui.add_space(PADDING);
@@ -382,6 +395,26 @@ impl PassGenApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(current.x, needed)));
         }
         self.fitted_height = needed;
+    }
+
+    /// The selected theme, or Dark if it isn't in the themes folder (any more).
+    fn theme(&self) -> Theme {
+        themes::find(&self.themes, &self.config.theme)
+            .or_else(|| themes::find(&self.themes, themes::DARK))
+            .cloned()
+            .unwrap_or_else(themes::fallback)
+    }
+
+    /// Loads the themes folder again, so new or edited theme files take effect.
+    fn reload_themes(&mut self) {
+        let (themes, messages) = themes::load_themes(&themes::themes_directory(&get_config_directory()));
+        let count = themes.len();
+        self.themes = themes;
+        self.status_message = if messages.is_empty() {
+            format!("Loaded {} themes.", count)
+        } else {
+            messages.join("\n")
+        };
     }
 
     /// Generates a password for every style so one is ready as soon as the window opens.
@@ -501,6 +534,21 @@ impl PassGenApp {
     }
 }
 
+/// Opens `dir` in the system's file manager, returning a status message.
+fn open_folder(dir: &std::path::Path) -> String {
+    let opener = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    match std::process::Command::new(opener).arg(dir).spawn() {
+        Ok(_) => format!("Opened {}", dir.display()),
+        Err(e) => format!("Could not open {}: {}", dir.display(), e),
+    }
+}
+
 /// A one-line explanation of a style, shown above its options.
 fn description(style: Style) -> &'static str {
     match style {
@@ -568,8 +616,8 @@ fn size_slider(
     });
 }
 
-/// A button showing a "copy" icon (two overlapping pages), or a green ✓ right after copying.
-fn copy_button(just_copied: bool) -> impl egui::Widget {
+/// A button showing a "copy" icon (two overlapping pages), or a ✓ in `success` right after copying.
+fn copy_button(just_copied: bool, success: egui::Color32) -> impl egui::Widget {
     move |ui: &mut egui::Ui| {
         let hover = if just_copied { "Copied!" } else { "Copy to clipboard" };
         let response = ui.add(egui::Button::new("").min_size(COPY_BUTTON_SIZE)).on_hover_text(hover);
@@ -583,7 +631,7 @@ fn copy_button(just_copied: bool) -> impl egui::Widget {
                 center + egui::vec2(-1.5, 3.5),
                 center + egui::vec2(5.0, -4.0),
             ];
-            painter.add(egui::Shape::line(check, egui::Stroke::new(2.0, COPIED_COLOR)));
+            painter.add(egui::Shape::line(check, egui::Stroke::new(2.0, success)));
         } else {
             let corner_radius = egui::CornerRadius::same(2);
             let page = egui::vec2(9.0, 11.0);

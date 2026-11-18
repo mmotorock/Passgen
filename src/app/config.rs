@@ -1,5 +1,6 @@
 use crate::app::password::{MAX_LENGTH, MAX_WORDS, MIN_LENGTH, MIN_WORDS};
-use crate::app::state::{Style, Theme};
+use crate::app::state::Style;
+use crate::app::themes::DARK;
 use crate::app::styles::{GROUPS_RANGE, PIN_LENGTH_RANGE, PRONOUNCEABLE_GROUPS_RANGE};
 use crate::app::utils::get_config_directory;
 use serde::{Deserialize, Serialize};
@@ -18,7 +19,8 @@ const FILE_HEADER: &str = "# Passgen settings. The app rewrites this file whenev
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(default)]
 pub struct Config {
-    pub theme: Theme,
+    /// The colour theme's ID: "light", "dark" or the name of a file in the themes folder.
+    pub theme: String,
     /// The style selected when the app opens, and used by the CLI unless told otherwise.
     pub default_style: Style,
     /// A custom wordlist; empty means the built-in list.
@@ -91,7 +93,7 @@ pub struct WordSettings {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            theme: Theme::Dark,
+            theme: DARK.to_string(),
             default_style: Style::Segmented,
             words_file_path: PathBuf::new(),
             characters: CharacterSettings::default(),
@@ -365,7 +367,7 @@ mod tests {
     #[test]
     fn round_trips_through_toml() {
         let config = Config {
-            theme: Theme::Light,
+            theme: "nord".to_string(),
             default_style: Style::Pronounceable,
             characters: CharacterSettings { special: "\"\\'#=[]".to_string(), ..Default::default() },
             pin: PinSettings { length: 9 },
@@ -379,7 +381,7 @@ mod tests {
     #[test]
     fn keeps_valid_entries_and_reports_invalid_ones() {
         let text = r#"
-            theme = "Purple"
+            theme = 5
             colour = 1
             default_tab = "Word"
 
@@ -413,7 +415,7 @@ mod tests {
                     use_uppercase_words=false\n";
         assert!(is_legacy_format(text));
         let config = from_legacy(text, old_words);
-        assert_eq!(config.theme, Theme::Light);
+        assert_eq!(config.theme, "Light", "theme IDs are matched ignoring case");
         assert_eq!(config.words_file_path, PathBuf::new());
         assert_eq!(config.default_style, Style::Segmented);
         assert!(!config.characters.use_special);
