@@ -7,6 +7,9 @@ use rfd::FileDialog;
 use std::path::PathBuf;
 
 const PADDING: f32 = 10.0;
+const MIN_LENGTH: usize = 12;
+const MAX_LENGTH: usize = 256;
+const LENGTH_BOX_WIDTH: f32 = 40.0;
 const COPY_BUTTON_SIZE: egui::Vec2 = egui::vec2(26.0, 22.0);
 
 impl eframe::App for PassGenApp {
@@ -125,7 +128,37 @@ impl PassGenApp {
 
         ui.horizontal(|ui| {
             ui.label("Password Length:");
-            ui.add(egui::DragValue::new(&mut self.char_length).clamp_range(12..=256));
+
+            // The slider fills the row, leaving room for the text box on the right.
+            ui.spacing_mut().slider_width = ui.available_width() - LENGTH_BOX_WIDTH - ui.spacing().item_spacing.x;
+            let default_length = Self::default().char_length;
+            let slider = ui
+                .add(egui::Slider::new(&mut self.char_length, MIN_LENGTH..=MAX_LENGTH).show_value(false))
+                .on_hover_text(format!("Double-click to reset to {}", default_length));
+            // The slider only senses drags, so detect the double-click from raw input.
+            let double_clicked = ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
+            if double_clicked && ui.rect_contains_pointer(slider.rect) {
+                self.char_length = default_length;
+            }
+
+            let length_box = ui.add(
+                egui::TextEdit::singleline(&mut self.char_length_input)
+                    .desired_width(LENGTH_BOX_WIDTH)
+                    .horizontal_align(egui::Align::Center),
+            );
+            // Typing a valid length moves the slider straight away; anything else is
+            // clamped or reverted once the box loses focus (Enter, Tab or clicking away).
+            if let Ok(typed) = self.char_length_input.trim().parse::<usize>() {
+                if length_box.changed() && (MIN_LENGTH..=MAX_LENGTH).contains(&typed) {
+                    self.char_length = typed;
+                }
+                if length_box.lost_focus() {
+                    self.char_length = typed.clamp(MIN_LENGTH, MAX_LENGTH);
+                }
+            }
+            if !length_box.has_focus() {
+                self.char_length_input = self.char_length.to_string();
+            }
         });
 
         ui.add_space(PADDING);

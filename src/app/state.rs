@@ -102,6 +102,7 @@ pub struct PassGenApp {
     pub use_numbers: bool,
     pub use_special: bool,
     pub char_length: usize,
+    pub char_length_input: String, // Text in the length box while it is being edited
     pub char_password_output: String,
 
     // Word generator state
@@ -138,6 +139,7 @@ impl Default for PassGenApp {
             use_numbers: true,
             use_special: true,
             char_length: 16,
+            char_length_input: String::new(),
             char_password_output: String::new(),
             words: Vec::new(),
             word_count: 3,
