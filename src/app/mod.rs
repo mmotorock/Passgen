@@ -3,6 +3,7 @@ pub mod cli;
 pub mod config;
 pub mod history;
 pub mod password;
+pub mod spelling;
 pub mod state;
 pub mod styles;
 pub mod themes;

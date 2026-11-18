@@ -30,10 +30,15 @@ Passgen is a versatile, secure password and passphrase generator built with Rust
     -   The history is stored encrypted (ChaCha20-Poly1305) in `history.dat`. The key is kept in the operating system's keyring (Windows Credential Manager, GNOME Keyring/KWallet on Linux, Keychain on macOS), so the file alone is useless to anyone who copies it.
     -   If no keyring is available, the history is kept for the current session only.
 -   **Quick to Use:**
-    -   A password is ready as soon as the app opens.
-    -   Generating a password copies it to the clipboard automatically. The clipboard is cleared after 2 minutes (only if it still holds that password).
-    -   Keyboard shortcuts: `Space` generates a new password, `Ctrl+C` copies the one on screen.
-    -   Settings that can't produce a password (e.g. no character set selected) are explained right under the Generate button.
+    -   A password is ready as soon as the app opens, and a new one appears as soon as you change an option.
+    -   Next to the password: **↻** generates a new one and copies it, **copy** copies the current one, and **🔊** spells it out. When something is copied, the button shows a check mark and the copied text flashes as if selected.
+    -   The clipboard is cleared after 2 minutes (only if it still holds that password).
+    -   Keyboard shortcuts: `Space` generates a new password and copies it, `Ctrl+C` copies the one on screen.
+    -   Settings that can't produce a password (e.g. no character set selected) are explained right under the password.
+-   **Easy to Read Out:**
+    -   Digits and symbols are shown in their own colours, so "capital, digit, symbol" is visible at a glance.
+    -   **🔊 Spell it out** shows the password in the NATO phonetic alphabet, grouped the way you'd read it: `asd2qwe+YUI6` becomes *alfa sierra delta · two · quebec whiskey echo · plus · capitals YANKEE UNIFORM INDIA · six*. It stays on until you turn it off (not shown for the Words style).
+    -   The character sets themselves are hidden behind **Edit characters…**, so the window stays compact; the four checkboxes are always visible.
 -   **Full Configuration:**
     -   All settings are saved automatically to a `config.toml` file as you change them.
     -   Choose which style the app opens on.
@@ -145,7 +150,7 @@ Missing or invalid entries fall back to their defaults (and are reported in the 
 
 ### Themes
 
-Pick a colour scheme in **Settings → Color scheme**. Besides egui's built-in **Light** and **Dark**, Passgen reads every `.toml` file in the `themes` folder inside the config folder (`~/.config/passgen/themes/` on Linux, `config\themes\` next to `Passgen.exe` on Windows). The first time it runs, it puts these there:
+Pick a colour scheme in **Settings (⚙, top right) → Color scheme**. Besides egui's built-in **Light** and **Dark**, Passgen reads every `.toml` file in the `themes` folder inside the config folder (`~/.config/passgen/themes/` on Linux, `config\themes\` next to `Passgen.exe` on Windows). The first time it runs, it puts these there:
 
 | Theme | File |
 |---|---|
@@ -175,8 +180,10 @@ widget_active = "#4c566a"   # the same, while pressed
 border        = "#3b4252"   # separators and outlines
 accent        = "#88c0d0"   # the selected style button, selected text
 accent_text   = "#2e3440"   # text drawn on the accent colour
-error         = "#bf616a"   # warnings under the Generate button
+error         = "#bf616a"   # warnings under the password
 success       = "#a3be8c"   # the check mark after copying
+digit         = "#81a1c1"   # digits in passwords
+symbol        = "#d08770"   # symbols in passwords
 ```
 
 A theme file with a mistake (such as a misspelt colour name or a colour that isn't `#rrggbb`) is skipped, and the status bar says why. If the selected theme's file is removed, Passgen falls back to Dark.

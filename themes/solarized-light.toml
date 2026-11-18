@@ -17,6 +17,8 @@
 #   accent_text    text drawn on the accent colour
 #   error          warnings under the Generate button
 #   success        the check mark after copying
+#   digit          digits in passwords
+#   symbol         symbols in passwords
 
 name = "Solarized Light"
 dark = false
@@ -35,3 +37,5 @@ accent        = "#268bd2"
 accent_text   = "#fdf6e3"
 error         = "#dc322f"
 success       = "#859900"
+digit         = "#2aa198"
+symbol        = "#cb4b16"

@@ -17,6 +17,8 @@
 #   accent_text    text drawn on the accent colour
 #   error          warnings under the Generate button
 #   success        the check mark after copying
+#   digit          digits in passwords
+#   symbol         symbols in passwords
 
 name = "Gruvbox Light"
 dark = false
@@ -35,3 +37,5 @@ accent        = "#b57614"
 accent_text   = "#fbf1c7"
 error         = "#9d0006"
 success       = "#79740e"
+digit         = "#076678"
+symbol        = "#af3a03"

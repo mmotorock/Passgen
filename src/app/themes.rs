@@ -21,6 +21,11 @@ const DEFAULT_THEME_FILES: [(&str, &str); 5] = [
 
 /// The check mark colour after copying, when a theme doesn't set `success`.
 const DEFAULT_SUCCESS: Color32 = Color32::from_rgb(80, 180, 100);
+/// Colours for digits and symbols in passwords, when a theme doesn't set them.
+const DEFAULT_DIGIT_DARK: Color32 = Color32::from_rgb(110, 180, 240);
+const DEFAULT_SYMBOL_DARK: Color32 = Color32::from_rgb(230, 160, 80);
+const DEFAULT_DIGIT_LIGHT: Color32 = Color32::from_rgb(30, 110, 180);
+const DEFAULT_SYMBOL_LIGHT: Color32 = Color32::from_rgb(180, 90, 0);
 
 /// A colour scheme the GUI can use.
 #[derive(Clone, Debug)]
@@ -32,6 +37,9 @@ pub struct Theme {
     pub visuals: Visuals,
     /// The colour of the check mark after copying.
     pub success: Color32,
+    /// The colours of digits and symbols in passwords, so their kind is visible at a glance.
+    pub digit: Color32,
+    pub symbol: Color32,
 }
 
 /// The contents of a theme file.
@@ -66,6 +74,8 @@ struct ThemeColors {
     accent_text: Option<Hex>,
     error: Option<Hex>,
     success: Option<Hex>,
+    digit: Option<Hex>,
+    symbol: Option<Hex>,
 }
 
 /// A colour written as "#rrggbb" or "#rrggbbaa".
@@ -84,17 +94,27 @@ impl<'de> Deserialize<'de> for Hex {
 impl Theme {
     /// egui's built-in light and dark themes.
     fn builtin() -> [Theme; 2] {
-        [
-            Theme { id: LIGHT.to_string(), name: "Light".to_string(), visuals: Visuals::light(), success: DEFAULT_SUCCESS },
-            Theme { id: DARK.to_string(), name: "Dark".to_string(), visuals: Visuals::dark(), success: DEFAULT_SUCCESS },
-        ]
+        [Theme::base(LIGHT, "Light", false), Theme::base(DARK, "Dark", true)]
+    }
+
+    /// egui's light or dark theme with the default extra colours.
+    fn base(id: &str, name: &str, dark: bool) -> Theme {
+        Theme {
+            id: id.to_string(),
+            name: name.to_string(),
+            visuals: if dark { Visuals::dark() } else { Visuals::light() },
+            success: DEFAULT_SUCCESS,
+            digit: if dark { DEFAULT_DIGIT_DARK } else { DEFAULT_DIGIT_LIGHT },
+            symbol: if dark { DEFAULT_SYMBOL_DARK } else { DEFAULT_SYMBOL_LIGHT },
+        }
     }
 
     /// Reads a theme from the text of a theme file called `<id>.toml`.
     fn from_toml(id: &str, text: &str) -> Result<Theme, String> {
         let file: ThemeFile = toml::from_str(text).map_err(|e| e.message().to_string())?;
         let colors = file.colors;
-        let mut visuals = if file.dark { Visuals::dark() } else { Visuals::light() };
+        let base = Theme::base(id, id, file.dark);
+        let mut visuals = base.visuals;
         let widgets = &mut visuals.widgets;
 
         if let Some(Hex(c)) = colors.background {
@@ -152,7 +172,9 @@ impl Theme {
             id: id.to_string(),
             name: file.name.unwrap_or_else(|| id.to_string()),
             visuals,
-            success: colors.success.map_or(DEFAULT_SUCCESS, |Hex(c)| c),
+            success: colors.success.map_or(base.success, |Hex(c)| c),
+            digit: colors.digit.map_or(base.digit, |Hex(c)| c),
+            symbol: colors.symbol.map_or(base.symbol, |Hex(c)| c),
         })
     }
 }

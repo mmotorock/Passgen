@@ -17,6 +17,8 @@
 #   accent_text    text drawn on the accent colour
 #   error          warnings under the Generate button
 #   success        the check mark after copying
+#   digit          digits in passwords
+#   symbol         symbols in passwords
 
 name = "Nord"
 dark = true
@@ -35,3 +37,5 @@ accent        = "#88c0d0"
 accent_text   = "#2e3440"
 error         = "#bf616a"
 success       = "#a3be8c"
+digit         = "#81a1c1"
+symbol        = "#d08770"

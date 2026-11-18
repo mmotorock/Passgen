@@ -1,5 +1,6 @@
 use crate::app::config::{CharacterSettings, Config, PinSettings, SegmentedSettings};
 use crate::app::history::MAX_ENTRIES;
+use crate::app::spelling::{spell_out, Kind};
 use crate::app::password::{MAX_LENGTH, MAX_WORDS, MIN_LENGTH, MIN_WORDS};
 use crate::app::state::{PassGenApp, Style};
 use crate::app::styles::{self, GROUPS_RANGE, PIN_LENGTH_RANGE, PRONOUNCEABLE_GROUPS_RANGE};
@@ -20,6 +21,9 @@ const PANEL_MARGIN: f32 = 8.0; // egui's default inner margin of the central pan
 const MIN_WINDOW_WIDTH: f32 = 480.0;
 const SIZE_BOX_WIDTH: f32 = 40.0;
 const COPY_BUTTON_SIZE: egui::Vec2 = egui::vec2(26.0, 22.0);
+const OUTPUT_FONT_SIZE: f32 = 20.0;
+/// The tallest the spelled-out password gets before it scrolls.
+const SPELLING_MAX_HEIGHT: f32 = 72.0;
 const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(120);
 const COPIED_FLASH_DURATION: Duration = Duration::from_millis(1500);
 /// After copying, the copied text is highlighted like a selection for this long, then fades out.
@@ -36,28 +40,6 @@ impl eframe::App for PassGenApp {
         // Handled before any widget so Space doesn't also press a focused button.
         self.handle_shortcuts(&ctx);
 
-        // --- Top Menu Bar ---
-        egui::Panel::top("top_panel").show(ui, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("Settings", |ui| {
-                    if ui.button("Open Settings").clicked() {
-                        self.show_settings_window = true;
-                        ui.close();
-                    }
-                    if ui.button("Restore Defaults").clicked() {
-                        // Keep the theme and wordlist; reset everything else.
-                        self.config = Config {
-                            theme: self.config.theme.clone(),
-                            words_file_path: self.config.words_file_path.clone(),
-                            ..Config::default()
-                        };
-                        self.status_message = "Default settings restored.".to_string();
-                        ui.close();
-                    }
-                });
-            });
-        });
-
         // --- Status Bar (bottom panels must be added before the central panel) ---
         let status_bar = egui::Panel::bottom("status_bar").show(ui, |ui| {
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -73,6 +55,12 @@ impl eframe::App for PassGenApp {
                     for style in Style::ALL {
                         ui.selectable_value(&mut self.active_style, style, style.label());
                     }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let gear = ui.add(egui::Button::new("⚙").selected(self.show_settings_window)).on_hover_text("Settings");
+                        if gear.clicked() {
+                            self.show_settings_window = !self.show_settings_window;
+                        }
+                    });
                 });
                 ui.separator();
 
@@ -93,6 +81,9 @@ impl eframe::App for PassGenApp {
 
         // Settings are saved as soon as they change, so there is nothing to confirm on exit.
         if self.config != self.saved_config {
+            if affects_passwords(&self.saved_config, &self.config) {
+                self.regenerate_all();
+            }
             if let Err(e) = self.config.save(&self.config_path) {
                 self.status_message = e;
             }
@@ -104,7 +95,7 @@ impl eframe::App for PassGenApp {
 }
 
 impl PassGenApp {
-    /// Draws the active style: a short description, its options, the Generate button and the result.
+    /// Draws the active style: a short description, its options and the result.
     fn draw_style(&mut self, ui: &mut egui::Ui) {
         let style = self.active_style;
         ui.add_space(PADDING / 2.0);
@@ -146,40 +137,52 @@ impl PassGenApp {
         } else {
             styles::problem(style, &self.config, self.words.len())
         };
-        let (button, output_label) = match style {
-            Style::Pin => ("Generate PIN", "Generated PIN:"),
-            Style::Words => ("Generate Passphrase", "Generated Passphrase:"),
-            _ => ("Generate Password", "Generated Password:"),
+        let output_label = match style {
+            Style::Pin => "Generated PIN:",
+            Style::Words => "Generated Passphrase:",
+            _ => "Generated Password:",
         };
-        self.draw_generate_button(ui, button, problem);
 
-        ui.add_space(PADDING);
         ui.separator();
         ui.add_space(PADDING);
-
         ui.label(output_label);
         let output = self.outputs.get(&style).cloned().unwrap_or_default();
-        self.draw_output(ui, &output);
+        self.draw_output(ui, &output, problem);
     }
 
-    /// Draws the four character sets with their checkboxes (used by Random and Segmented).
+    /// Draws the character-set checkboxes and, if shown, the editable sets (Random and Segmented).
     fn draw_character_sets(&mut self, ui: &mut egui::Ui) {
+        let show_fields = &mut self.config.show_character_fields;
         let sets = &mut self.config.characters;
-        egui::Grid::new("char_sets_grid")
-            .num_columns(2)
-            .spacing([PADDING, PADDING])
-            .show(ui, |ui| {
-                for (enabled, chars, name) in [
-                    (&mut sets.use_lowercase, &mut sets.lowercase, "Lowercase"),
-                    (&mut sets.use_uppercase, &mut sets.uppercase, "Uppercase"),
-                    (&mut sets.use_numbers, &mut sets.numbers, "Numbers"),
-                    (&mut sets.use_special, &mut sets.special, "Special"),
-                ] {
+        let rows = [
+            (&mut sets.use_lowercase, &mut sets.lowercase, "Lowercase"),
+            (&mut sets.use_uppercase, &mut sets.uppercase, "Uppercase"),
+            (&mut sets.use_numbers, &mut sets.numbers, "Numbers"),
+            (&mut sets.use_special, &mut sets.special, "Special"),
+        ];
+
+        if *show_fields {
+            egui::Grid::new("char_sets_grid")
+                .num_columns(2)
+                .spacing([PADDING, PADDING])
+                .show(ui, |ui| {
+                    for (enabled, chars, name) in rows {
+                        ui.checkbox(enabled, name);
+                        ui.add(egui::TextEdit::singleline(chars).desired_width(f32::INFINITY));
+                        ui.end_row();
+                    }
+                });
+        } else {
+            ui.horizontal(|ui| {
+                for (enabled, _, name) in rows {
                     ui.checkbox(enabled, name);
-                    ui.add(egui::TextEdit::singleline(chars).desired_width(f32::INFINITY));
-                    ui.end_row();
                 }
             });
+        }
+        let toggle = if *show_fields { "Hide characters" } else { "Edit characters…" };
+        if ui.small_button(toggle).on_hover_text("Choose exactly which characters each set uses").clicked() {
+            *show_fields = !*show_fields;
+        }
         ui.add_space(PADDING);
     }
 
@@ -202,35 +205,28 @@ impl PassGenApp {
         });
     }
 
-    /// Draws the Generate button. If the settings can't work (`problem`), the button is
-    /// disabled and the reason is shown beneath it, as is any error from the last attempt.
-    fn draw_generate_button(&mut self, ui: &mut egui::Ui, label: &str, problem: Option<String>) {
-        let button = ui
-            .add_enabled_ui(problem.is_none(), |ui| {
-                ui.add_sized([ui.available_width(), 40.0], egui::Button::new(label))
-            })
-            .inner
-            .on_hover_text("Shortcut: Space");
-        if button.clicked() {
-            self.generate_and_copy(ui.ctx());
-        }
-
-        if let Some(message) = problem.or_else(|| self.generate_error.clone()) {
-            ui.add_space(PADDING / 2.0);
-            let color = ui.visuals().error_fg_color;
-            ui.label(egui::RichText::new(format!("⚠ {}", message)).color(color));
-        }
-    }
-
-    /// Draws a generated password with its copy button.
-    fn draw_output(&mut self, ui: &mut egui::Ui, password: &str) {
+    /// Draws a generated password, colour-coded, with buttons to generate a new one, copy it and
+    /// spell it out. If the settings can't work (`problem`), the reason is shown beneath it, as is
+    /// any error from the last attempt.
+    fn draw_output(&mut self, ui: &mut egui::Ui, password: &str, problem: Option<String>) {
         let copied = self.was_just_copied(ui.ctx(), password);
-        let success = self.theme().success;
+        let theme = self.theme();
         let highlight = self.highlight_strength(ui.ctx(), password);
+        let can_spell = self.active_style != Style::Words;
+        let buttons = if can_spell { 3.0 } else { 2.0 };
+        let colors = PasswordColors::of(ui, &theme);
+
         ui.horizontal(|ui| {
+            let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+                let mut job = colored_password(text.as_str(), egui::FontId::monospace(OUTPUT_FONT_SIZE), colors);
+                job.wrap.max_width = wrap_width;
+                ui.fonts_mut(|fonts| fonts.layout_job(job))
+            };
+            let buttons_width = buttons * (COPY_BUTTON_SIZE.x + ui.spacing().item_spacing.x);
             let field = egui::TextEdit::singleline(&mut &*password)
-                .font(egui::FontId::monospace(20.0))
-                .desired_width(ui.available_width() - 60.0)
+                .font(egui::FontId::monospace(OUTPUT_FONT_SIZE))
+                .layouter(&mut layouter)
+                .desired_width(ui.available_width() - buttons_width - PADDING)
                 .show(ui);
             if let Some(strength) = highlight {
                 let text_rect = field.galley.rect.translate(field.galley_pos.to_vec2());
@@ -238,10 +234,33 @@ impl PassGenApp {
                     painter.galley_with_override_text_color(field.galley_pos, field.galley.clone(), color);
                 });
             }
-            if ui.add(copy_button(copied, success)).on_hover_text("Shortcut: Ctrl+C").clicked() {
+
+            let regenerate = ui
+                .add_enabled(problem.is_none(), egui::Button::new("↻").min_size(COPY_BUTTON_SIZE))
+                .on_hover_text("Generate a new one and copy it (Space)");
+            if regenerate.clicked() {
+                self.generate_and_copy(ui.ctx());
+            }
+            if ui.add(copy_button(copied, theme.success)).on_hover_text("Shortcut: Ctrl+C").clicked() {
                 self.copy_output(ui.ctx());
             }
+            if can_spell {
+                let spell = egui::Button::new("🔊").selected(self.config.spell_out).min_size(COPY_BUTTON_SIZE);
+                if ui.add(spell).on_hover_text("Spell it out, e.g. for reading over the phone").clicked() {
+                    self.config.spell_out = !self.config.spell_out;
+                }
+            }
         });
+
+        if can_spell && self.config.spell_out && !password.is_empty() {
+            ui.add_space(PADDING / 2.0);
+            draw_spelling(ui, password, colors);
+        }
+        if let Some(message) = problem.or_else(|| self.generate_error.clone()) {
+            ui.add_space(PADDING / 2.0);
+            let color = ui.visuals().error_fg_color;
+            ui.label(egui::RichText::new(format!("⚠ {}", message)).color(color));
+        }
     }
 
     /// Draws the list of recently generated passwords.
@@ -262,7 +281,9 @@ impl PassGenApp {
         }
 
         let mut copied = None;
-        let success = self.theme().success;
+        let theme = self.theme();
+        let success = theme.success;
+        let colors = PasswordColors::of(ui, &theme);
         let row_height = COPY_BUTTON_SIZE.y.max(ui.spacing().interact_size.y);
         for entry in &self.history.entries {
             let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), row_height), egui::Sense::hover());
@@ -284,11 +305,10 @@ impl PassGenApp {
             } else {
                 "•".repeat(entry.password.chars().count().min(24))
             };
-            let password_rect = row_ui
-                .add(egui::Label::new(egui::RichText::new(&shown).monospace()).extend())
-                .rect;
+            let font = egui::TextStyle::Monospace.resolve(ui.style());
+            let label = egui::Label::new(colored_password(&shown, font.clone(), colors)).extend();
+            let password_rect = row_ui.add(label).rect;
             if let Some(strength) = self.highlight_strength(ui.ctx(), &entry.password) {
-                let font = egui::TextStyle::Monospace.resolve(ui.style());
                 paint_highlight(&row_ui, password_rect, text_area, strength, |painter, color| {
                     painter.text(password_rect.left_center(), egui::Align2::LEFT_CENTER, &shown, font, color);
                 });
@@ -389,6 +409,22 @@ impl PassGenApp {
                         self.set_wordlist(PathBuf::new());
                     }
                 });
+
+                ui.add_space(PADDING);
+                ui.separator();
+                ui.add_space(PADDING);
+
+                let restore = ui.button("Restore Defaults").on_hover_text(
+                    "Reset every style's options and the default style; keeps the colour scheme and wordlist",
+                );
+                if restore.clicked() {
+                    self.config = Config {
+                        theme: self.config.theme.clone(),
+                        words_file_path: self.config.words_file_path.clone(),
+                        ..Config::default()
+                    };
+                    self.status_message = "Default settings restored.".to_string();
+                }
             });
         self.show_settings_window = open;
     }
@@ -437,6 +473,16 @@ impl PassGenApp {
     fn generate_on_startup(&mut self) {
         for style in Style::ALL {
             let _ = self.generate(style);
+        }
+    }
+
+    /// Generates a new password for every style, without copying them. A style whose settings
+    /// can't work is left empty, and explains why when selected.
+    fn regenerate_all(&mut self) {
+        for style in Style::ALL {
+            if self.generate(style).is_err() {
+                self.outputs.remove(&style);
+            }
         }
     }
 
@@ -560,6 +606,87 @@ impl PassGenApp {
             self.copy_output(ctx);
         }
     }
+}
+
+/// Whether a settings change can change the generated passwords (not just the theme, the default
+/// style or what's shown), so they should be generated again.
+fn affects_passwords(old: &Config, new: &Config) -> bool {
+    let generation_only = |config: &Config| Config {
+        theme: String::new(),
+        default_style: Style::Random,
+        show_character_fields: false,
+        spell_out: false,
+        ..config.clone()
+    };
+    generation_only(old) != generation_only(new)
+}
+
+/// The colours a password is drawn in, by kind of character.
+#[derive(Clone, Copy)]
+struct PasswordColors {
+    text: egui::Color32,
+    weak: egui::Color32,
+    digit: egui::Color32,
+    symbol: egui::Color32,
+}
+
+impl PasswordColors {
+    fn of(ui: &egui::Ui, theme: &Theme) -> Self {
+        let visuals = ui.visuals();
+        Self { text: visuals.text_color(), weak: visuals.weak_text_color(), digit: theme.digit, symbol: theme.symbol }
+    }
+}
+
+/// Lays out a password with digits and symbols in their own colours. The bullets that hide
+/// passwords in the history keep the normal text colour.
+fn colored_password(password: &str, font: egui::FontId, colors: PasswordColors) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    for c in password.chars() {
+        let color = if c.is_ascii_digit() {
+            colors.digit
+        } else if c.is_alphanumeric() || c == '•' {
+            colors.text
+        } else {
+            colors.symbol
+        };
+        job.append(c.encode_utf8(&mut [0; 4]), 0.0, egui::TextFormat::simple(font.clone(), color));
+    }
+    job
+}
+
+/// Draws the password spelled out with the phonetic alphabet, one run of characters of the same
+/// kind at a time: "alfa sierra delta · two · capitals yankee uniform india · plus".
+fn draw_spelling(ui: &mut egui::Ui, password: &str, colors: PasswordColors) {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let format = |color| egui::TextFormat::simple(font.clone(), color);
+    let mut job = egui::text::LayoutJob::default();
+    for (i, run) in spell_out(password).iter().enumerate() {
+        if i > 0 {
+            job.append(" · ", 0.0, format(colors.weak));
+        }
+        let words = run.words.join(" ");
+        match run.kind {
+            Kind::Lowercase => job.append(&words, 0.0, format(colors.text)),
+            Kind::Uppercase => {
+                let prefix = if run.words.len() > 1 { "capitals " } else { "capital " };
+                job.append(prefix, 0.0, format(colors.weak));
+                job.append(&words.to_uppercase(), 0.0, format(colors.text));
+            }
+            Kind::Digit => job.append(&words, 0.0, format(colors.digit)),
+            Kind::Symbol => job.append(&words, 0.0, format(colors.symbol)),
+        }
+    }
+
+    egui::Frame::new()
+        .fill(ui.visuals().text_edit_bg_color())
+        .corner_radius(4.0)
+        .inner_margin(6.0)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            egui::ScrollArea::vertical().max_height(SPELLING_MAX_HEIGHT).show(ui, |ui| {
+                ui.add(egui::Label::new(job).wrap());
+            });
+        });
 }
 
 /// Highlights text the way a selection looks: the theme's selection colour behind it and its
@@ -709,4 +836,42 @@ pub fn run_gui_mode() {
         }),
     )
     .expect("Failed to run eframe");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_generation_settings_trigger_regeneration() {
+        let old = Config::default();
+        let display_only = Config {
+            theme: "nord".to_string(),
+            default_style: Style::Pin,
+            show_character_fields: true,
+            spell_out: true,
+            ..old.clone()
+        };
+        assert!(!affects_passwords(&old, &display_only));
+
+        let mut longer = old.clone();
+        longer.segmented.length += 1;
+        assert!(affects_passwords(&old, &longer));
+        let mut no_symbols = old.clone();
+        no_symbols.characters.use_special = false;
+        assert!(affects_passwords(&old, &no_symbols));
+    }
+
+    #[test]
+    fn colours_digits_and_symbols() {
+        let colors = PasswordColors {
+            text: egui::Color32::WHITE,
+            weak: egui::Color32::GRAY,
+            digit: egui::Color32::BLUE,
+            symbol: egui::Color32::RED,
+        };
+        let job = colored_password("a2+•", egui::FontId::monospace(12.0), colors);
+        let section_colors: Vec<egui::Color32> = job.sections.iter().map(|s| s.format.color).collect();
+        assert_eq!(section_colors, [colors.text, colors.digit, colors.symbol, colors.text]);
+    }
 }

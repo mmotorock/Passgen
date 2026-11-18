@@ -25,6 +25,10 @@ pub struct Config {
     pub default_style: Style,
     /// A custom wordlist; empty means the built-in list.
     pub words_file_path: PathBuf,
+    /// Show the editable character sets under the checkboxes (Random and Segmented styles).
+    pub show_character_fields: bool,
+    /// Spell the password out with the phonetic alphabet under the password.
+    pub spell_out: bool,
     /// The character sets (used by the Random and Segmented styles) and the Random length.
     pub characters: CharacterSettings,
     pub segmented: SegmentedSettings,
@@ -96,6 +100,8 @@ impl Default for Config {
             theme: DARK.to_string(),
             default_style: Style::Segmented,
             words_file_path: PathBuf::new(),
+            show_character_fields: false,
+            spell_out: false,
             characters: CharacterSettings::default(),
             segmented: SegmentedSettings::default(),
             grouped: GroupedSettings::default(),
