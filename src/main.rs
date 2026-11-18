@@ -16,7 +16,7 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let args = CliArgs::parse();
 
-    if args.length.is_some() || args.words.is_some() {
+    if args.wants_cli() {
         run_cli(&args)
     } else {
         run_gui_mode();

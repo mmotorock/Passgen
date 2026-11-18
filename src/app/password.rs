@@ -83,7 +83,7 @@ fn character_pool(selected_sets: &[Vec<char>]) -> Vec<char> {
 
 /// The most times a single character may appear. Short passwords keep the limit of 3;
 /// longer ones raise it just enough that the pool can always fill the requested length.
-fn max_repeats_for(length: usize, pool_size: usize) -> usize {
+pub(crate) fn max_repeats_for(length: usize, pool_size: usize) -> usize {
     3.max(length.div_ceil(pool_size) + 1)
 }
 

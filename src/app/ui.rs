@@ -1,13 +1,12 @@
-use crate::app::config::{CharacterSettings, Config};
+use crate::app::config::{CharacterSettings, Config, PinSettings, SegmentedSettings};
 use crate::app::history::MAX_ENTRIES;
-use crate::app::password::{
-    char_settings_problem, generate_char_password, generate_word_password, word_settings_problem, MAX_LENGTH,
-    MAX_WORDS, MIN_LENGTH, MIN_WORDS,
-};
-use crate::app::state::{PassGenApp, Tab, Theme};
+use crate::app::password::{MAX_LENGTH, MAX_WORDS, MIN_LENGTH, MIN_WORDS};
+use crate::app::state::{PassGenApp, Style, Theme};
+use crate::app::styles::{self, GROUPS_RANGE, PIN_LENGTH_RANGE, PRONOUNCEABLE_GROUPS_RANGE};
 use crate::app::utils::{load_icon, load_words};
 use eframe::{egui, NativeOptions};
 use rfd::FileDialog;
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -17,7 +16,7 @@ pub const APP_ID: &str = "passgen";
 const PADDING: f32 = 10.0;
 const PANEL_MARGIN: f32 = 8.0; // egui's default inner margin of the central panel
 const MIN_WINDOW_WIDTH: f32 = 480.0;
-const LENGTH_BOX_WIDTH: f32 = 40.0;
+const SIZE_BOX_WIDTH: f32 = 40.0;
 const COPY_BUTTON_SIZE: egui::Vec2 = egui::vec2(26.0, 22.0);
 const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(120);
 const COPIED_FLASH_DURATION: Duration = Duration::from_millis(1500);
@@ -69,18 +68,16 @@ impl eframe::App for PassGenApp {
 
         let content_bottom = egui::CentralPanel::default()
             .show(ui, |ui| {
-                // --- Tab Selection ---
+                // --- Style Selection ---
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.active_tab, Tab::Character, "Characters");
-                    ui.selectable_value(&mut self.active_tab, Tab::Word, "Words");
+                    for style in Style::ALL {
+                        ui.selectable_value(&mut self.active_style, style, style.label());
+                    }
                 });
                 ui.separator();
 
-                // --- Render Active Tab ---
-                match self.active_tab {
-                    Tab::Character => self.draw_character_tab(ui),
-                    Tab::Word => self.draw_word_tab(ui),
-                }
+                // --- Options, Generate button and output for the active style ---
+                self.draw_style(ui);
 
                 // --- History, directly under the generated password ---
                 ui.add_space(PADDING);
@@ -107,90 +104,88 @@ impl eframe::App for PassGenApp {
 }
 
 impl PassGenApp {
-    /// Draws the UI for the "Characters" tab.
-    fn draw_character_tab(&mut self, ui: &mut egui::Ui) {
+    /// Draws the active style: a short description, its options, the Generate button and the result.
+    fn draw_style(&mut self, ui: &mut egui::Ui) {
+        let style = self.active_style;
+        ui.add_space(PADDING / 2.0);
+        ui.label(egui::RichText::new(description(style)).weak());
+        ui.add_space(PADDING);
+
+        match style {
+            Style::Random => {
+                self.draw_character_sets(ui);
+                let default = CharacterSettings::default().length;
+                let range = MIN_LENGTH..=MAX_LENGTH;
+                size_slider(ui, "Length:", &mut self.config.characters.length, range, default, &mut self.size_input);
+            }
+            Style::Segmented => {
+                self.draw_character_sets(ui);
+                let default = SegmentedSettings::default().length;
+                let range = MIN_LENGTH..=MAX_LENGTH;
+                size_slider(ui, "Length:", &mut self.config.segmented.length, range, default, &mut self.size_input);
+            }
+            Style::Grouped => {
+                radio_row(ui, "Groups:", &mut self.config.grouped.groups, GROUPS_RANGE);
+            }
+            Style::Pronounceable => {
+                radio_row(ui, "Groups:", &mut self.config.pronounceable.groups, PRONOUNCEABLE_GROUPS_RANGE);
+                ui.add_space(PADDING / 2.0);
+                ui.checkbox(&mut self.config.pronounceable.include_number, "Include a number");
+            }
+            Style::Pin => {
+                let default = PinSettings::default().length;
+                size_slider(ui, "Digits:", &mut self.config.pin.length, PIN_LENGTH_RANGE, default, &mut self.size_input);
+            }
+            Style::Words => self.draw_word_options(ui),
+        }
+
+        ui.add_space(PADDING);
+        // If the wordlist couldn't be loaded, the reason is more useful than "it's empty".
+        let problem = if style == Style::Words && self.words.is_empty() {
+            Some(self.wordlist_status.clone())
+        } else {
+            styles::problem(style, &self.config, self.words.len())
+        };
+        let (button, output_label) = match style {
+            Style::Pin => ("Generate PIN", "Generated PIN:"),
+            Style::Words => ("Generate Passphrase", "Generated Passphrase:"),
+            _ => ("Generate Password", "Generated Password:"),
+        };
+        self.draw_generate_button(ui, button, problem);
+
+        ui.add_space(PADDING);
+        ui.separator();
+        ui.add_space(PADDING);
+
+        ui.label(output_label);
+        let output = self.outputs.get(&style).cloned().unwrap_or_default();
+        self.draw_output(ui, &output);
+    }
+
+    /// Draws the four character sets with their checkboxes (used by Random and Segmented).
+    fn draw_character_sets(&mut self, ui: &mut egui::Ui) {
+        let sets = &mut self.config.characters;
         egui::Grid::new("char_sets_grid")
             .num_columns(2)
             .spacing([PADDING, PADDING])
             .show(ui, |ui| {
-                ui.checkbox(&mut self.config.characters.use_lowercase, "Lowercase");
-                ui.add(egui::TextEdit::singleline(&mut self.config.characters.lowercase).desired_width(f32::INFINITY));
-                ui.end_row();
-                ui.checkbox(&mut self.config.characters.use_uppercase, "Uppercase");
-                ui.add(egui::TextEdit::singleline(&mut self.config.characters.uppercase).desired_width(f32::INFINITY));
-                ui.end_row();
-                ui.checkbox(&mut self.config.characters.use_numbers, "Numbers");
-                ui.add(egui::TextEdit::singleline(&mut self.config.characters.numbers).desired_width(f32::INFINITY));
-                ui.end_row();
-                ui.checkbox(&mut self.config.characters.use_special, "Special");
-                ui.add(egui::TextEdit::singleline(&mut self.config.characters.special).desired_width(f32::INFINITY));
-                ui.end_row();
+                for (enabled, chars, name) in [
+                    (&mut sets.use_lowercase, &mut sets.lowercase, "Lowercase"),
+                    (&mut sets.use_uppercase, &mut sets.uppercase, "Uppercase"),
+                    (&mut sets.use_numbers, &mut sets.numbers, "Numbers"),
+                    (&mut sets.use_special, &mut sets.special, "Special"),
+                ] {
+                    ui.checkbox(enabled, name);
+                    ui.add(egui::TextEdit::singleline(chars).desired_width(f32::INFINITY));
+                    ui.end_row();
+                }
             });
-
         ui.add_space(PADDING);
-        ui.separator();
-        ui.add_space(PADDING);
-
-        ui.horizontal(|ui| {
-            ui.label("Password Length:");
-
-            // The slider fills the row, leaving room for the text box on the right.
-            ui.spacing_mut().slider_width = ui.available_width() - LENGTH_BOX_WIDTH - ui.spacing().item_spacing.x;
-            let default_length = CharacterSettings::default().length;
-            let slider = ui
-                .add(egui::Slider::new(&mut self.config.characters.length, MIN_LENGTH..=MAX_LENGTH).show_value(false))
-                .on_hover_text(format!("Double-click to reset to {}", default_length));
-            // The slider only senses drags, so detect the double-click from raw input.
-            let double_clicked = ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
-            if double_clicked && ui.rect_contains_pointer(slider.rect) {
-                self.config.characters.length = default_length;
-            }
-
-            let length_box = ui.add(
-                egui::TextEdit::singleline(&mut self.char_length_input)
-                    .desired_width(LENGTH_BOX_WIDTH)
-                    .align(egui::Align2::CENTER_CENTER),
-            );
-            // Typing a valid length moves the slider straight away; anything else is
-            // clamped or reverted once the box loses focus (Enter, Tab or clicking away).
-            if let Ok(typed) = self.char_length_input.trim().parse::<usize>() {
-                if length_box.changed() && (MIN_LENGTH..=MAX_LENGTH).contains(&typed) {
-                    self.config.characters.length = typed;
-                }
-                if length_box.lost_focus() {
-                    self.config.characters.length = typed.clamp(MIN_LENGTH, MAX_LENGTH);
-                }
-            }
-            if !length_box.has_focus() {
-                self.char_length_input = self.config.characters.length.to_string();
-            }
-        });
-
-        ui.add_space(PADDING);
-        let problem = char_settings_problem(&self.config.characters);
-        self.draw_generate_button(ui, "Generate Password", problem);
-
-        ui.add_space(PADDING);
-        ui.separator();
-        ui.add_space(PADDING);
-
-        ui.label("Generated Password:");
-        let output = self.char_password_output.clone();
-        self.draw_output(ui, &output);
     }
 
-    /// Draws the UI for the "Words" tab.
-    fn draw_word_tab(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(PADDING);
-        ui.label("Generate a memorable passphrase from a list of words.");
-        ui.add_space(PADDING);
-
-        ui.horizontal(|ui| {
-            ui.label("Number of words:");
-            for count in MIN_WORDS..=MAX_WORDS {
-                ui.radio_value(&mut self.config.words.count, count, count.to_string());
-            }
-        });
+    /// Draws the passphrase options (the Words style).
+    fn draw_word_options(&mut self, ui: &mut egui::Ui) {
+        radio_row(ui, "Number of words:", &mut self.config.words.count, MIN_WORDS..=MAX_WORDS);
         ui.add_space(PADDING);
 
         ui.checkbox(&mut self.config.words.capitalize, "Uppercase first character of words");
@@ -205,26 +200,9 @@ impl PassGenApp {
                 }
             });
         });
-
-        ui.add_space(PADDING);
-        // If the wordlist couldn't be loaded, the reason is more useful than "it's empty".
-        let problem = if self.words.is_empty() {
-            Some(self.wordlist_status.clone())
-        } else {
-            word_settings_problem(&self.config.words, self.words.len())
-        };
-        self.draw_generate_button(ui, "Generate Passphrase", problem);
-
-        ui.add_space(PADDING);
-        ui.separator();
-        ui.add_space(PADDING);
-
-        ui.label("Generated Passphrase:");
-        let output = self.word_password_output.clone();
-        self.draw_output(ui, &output);
     }
 
-    /// Draws a tab's Generate button. If the settings can't work (`problem`), the button is
+    /// Draws the Generate button. If the settings can't work (`problem`), the button is
     /// disabled and the reason is shown beneath it, as is any error from the last attempt.
     fn draw_generate_button(&mut self, ui: &mut egui::Ui, label: &str, problem: Option<String>) {
         let button = ui
@@ -342,10 +320,15 @@ impl PassGenApp {
                 ui.add_space(PADDING);
 
                 ui.heading("Startup");
-                ui.label("Default tab:");
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.config.default_tab, Tab::Character, "Characters");
-                    ui.radio_value(&mut self.config.default_tab, Tab::Word, "Words");
+                    ui.label("Default style:");
+                    egui::ComboBox::from_id_salt("default_style")
+                        .selected_text(self.config.default_style.label())
+                        .show_ui(ui, |ui| {
+                            for style in Style::ALL {
+                                ui.selectable_value(&mut self.config.default_style, style, style.label());
+                            }
+                        });
                 });
 
                 ui.add_space(PADDING);
@@ -385,7 +368,7 @@ impl PassGenApp {
 
 impl PassGenApp {
     /// Keeps the window tall enough for its content without empty space: it is sized to fit
-    /// on startup, grows if the content does (more history, a taller tab) and can't be
+    /// on startup, grows if the content does (more history, a taller style) and can't be
     /// shrunk below the content. Extra height from resizing ends up below the history.
     fn fit_window_to_content(&mut self, ctx: &egui::Context, needed_height: f32) {
         let needed = needed_height.ceil();
@@ -401,23 +384,18 @@ impl PassGenApp {
         self.fitted_height = needed;
     }
 
-    /// Generates passwords for both tabs so one is ready as soon as the window opens.
-    /// Errors are ignored here; the tabs explain unusable settings themselves.
+    /// Generates a password for every style so one is ready as soon as the window opens.
+    /// Errors are ignored here; each style explains unusable settings itself.
     fn generate_on_startup(&mut self) {
-        let _ = self.generate(Tab::Character);
-        let _ = self.generate(Tab::Word);
+        for style in Style::ALL {
+            let _ = self.generate(style);
+        }
     }
 
-    /// Generates a new password for `tab` and shows it, without copying it.
-    fn generate(&mut self, tab: Tab) -> Result<(), String> {
-        match tab {
-            Tab::Character => {
-                self.char_password_output = generate_char_password(&self.config.characters)?;
-            }
-            Tab::Word => {
-                self.word_password_output = generate_word_password(&self.config.words, &self.words)?;
-            }
-        }
+    /// Generates a new password in `style` and shows it, without copying it.
+    fn generate(&mut self, style: Style) -> Result<(), String> {
+        let password = styles::generate(style, &self.config, &self.words)?;
+        self.outputs.insert(style, password);
         Ok(())
     }
 
@@ -430,14 +408,14 @@ impl PassGenApp {
         self.words = words;
         self.status_message = status.clone();
         self.wordlist_status = status;
-        if self.generate(Tab::Word).is_err() {
-            self.word_password_output.clear(); // The Words tab explains why
+        if self.generate(Style::Words).is_err() {
+            self.outputs.remove(&Style::Words); // The Words style explains why
         }
     }
 
-    /// Generates a new password for the active tab and copies it.
+    /// Generates a new password in the active style and copies it.
     fn generate_and_copy(&mut self, ctx: &egui::Context) {
-        match self.generate(self.active_tab) {
+        match self.generate(self.active_style) {
             Ok(()) => {
                 self.generate_error = None;
                 self.copy_output(ctx);
@@ -446,15 +424,11 @@ impl PassGenApp {
         }
     }
 
-    /// Copies the password shown on the active tab and records it in the history.
+    /// Copies the password shown for the active style and records it in the history.
     fn copy_output(&mut self, ctx: &egui::Context) {
-        let password = match self.active_tab {
-            Tab::Character => self.char_password_output.clone(),
-            Tab::Word => self.word_password_output.clone(),
-        };
-        if password.is_empty() {
+        let Some(password) = self.outputs.get(&self.active_style).cloned() else {
             return;
-        }
+        };
         let history_result = self.history.add(&password);
         self.copy_to_clipboard(ctx, password);
         if let Err(e) = history_result {
@@ -527,6 +501,73 @@ impl PassGenApp {
     }
 }
 
+/// A one-line explanation of a style, shown above its options.
+fn description(style: Style) -> &'static str {
+    match style {
+        Style::Random => "Every character picked at random from the selected sets.",
+        Style::Segmented => "Groups of 3 letters in the same case, each followed by a number or symbol.",
+        Style::Grouped => "Blocks of 6 lowercase letters with one capital and one digit, like Apple's passwords.",
+        Style::Pronounceable => "Made-up words of easy syllables that you can say out loud.",
+        Style::Pin => "Digits only, avoiding obvious patterns like 111111 or 123456.",
+        Style::Words => "A memorable passphrase of common words.",
+    }
+}
+
+/// A row of radio buttons, one for each value in `range`.
+fn radio_row(ui: &mut egui::Ui, label: &str, value: &mut usize, range: RangeInclusive<usize>) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        for option in range {
+            ui.radio_value(value, option, option.to_string());
+        }
+    });
+}
+
+/// A slider with a text box for typing the value. Double-clicking the slider resets it
+/// to `default`; `input` holds the box's text while it is being edited.
+fn size_slider(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut usize,
+    range: RangeInclusive<usize>,
+    default: usize,
+    input: &mut String,
+) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+
+        // The slider fills the row, leaving room for the text box on the right.
+        ui.spacing_mut().slider_width = ui.available_width() - SIZE_BOX_WIDTH - ui.spacing().item_spacing.x;
+        let slider = ui
+            .add(egui::Slider::new(value, range.clone()).show_value(false))
+            .on_hover_text(format!("Double-click to reset to {}", default));
+        // The slider only senses drags, so detect the double-click from raw input.
+        let double_clicked = ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
+        if double_clicked && ui.rect_contains_pointer(slider.rect) {
+            *value = default;
+        }
+
+        let size_box = ui.add(
+            egui::TextEdit::singleline(input)
+                .desired_width(SIZE_BOX_WIDTH)
+                .align(egui::Align2::CENTER_CENTER),
+        );
+        // Typing a valid value moves the slider straight away; anything else is
+        // clamped or reverted once the box loses focus (Enter, Tab or clicking away).
+        if let Ok(typed) = input.trim().parse::<usize>() {
+            if size_box.changed() && range.contains(&typed) {
+                *value = typed;
+            }
+            if size_box.lost_focus() {
+                *value = typed.clamp(*range.start(), *range.end());
+            }
+        }
+        if !size_box.has_focus() {
+            *input = value.to_string();
+        }
+    });
+}
+
 /// A button showing a "copy" icon (two overlapping pages), or a green ✓ right after copying.
 fn copy_button(just_copied: bool) -> impl egui::Widget {
     move |ui: &mut egui::Ui| {
@@ -560,7 +601,7 @@ pub fn run_gui_mode() {
     let icon = load_icon();
     let options = NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([540.0, 600.0]) // The height is fitted to the content on startup
+            .with_inner_size([560.0, 600.0]) // The height is fitted to the content on startup
             .with_min_inner_size([MIN_WINDOW_WIDTH, 300.0])
             .with_app_id(APP_ID) // On Wayland the dock icon comes from the matching .desktop file
             .with_icon(icon), // Used on Windows and X11

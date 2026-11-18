@@ -1,5 +1,6 @@
 use crate::app::password::{MAX_LENGTH, MAX_WORDS, MIN_LENGTH, MIN_WORDS};
-use crate::app::state::{Tab, Theme};
+use crate::app::state::{Style, Theme};
+use crate::app::styles::{GROUPS_RANGE, PIN_LENGTH_RANGE, PRONOUNCEABLE_GROUPS_RANGE};
 use crate::app::utils::get_config_directory;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -18,11 +19,46 @@ const FILE_HEADER: &str = "# Passgen settings. The app rewrites this file whenev
 #[serde(default)]
 pub struct Config {
     pub theme: Theme,
-    pub default_tab: Tab,
+    /// The style selected when the app opens, and used by the CLI unless told otherwise.
+    pub default_style: Style,
     /// A custom wordlist; empty means the built-in list.
     pub words_file_path: PathBuf,
+    /// The character sets (used by the Random and Segmented styles) and the Random length.
     pub characters: CharacterSettings,
+    pub segmented: SegmentedSettings,
+    pub grouped: GroupedSettings,
+    pub pronounceable: PronounceableSettings,
+    pub pin: PinSettings,
     pub words: WordSettings,
+}
+
+/// Settings for the Segmented style; its characters come from `CharacterSettings`.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(default)]
+pub struct SegmentedSettings {
+    pub length: usize,
+}
+
+/// Settings for the Grouped style.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(default)]
+pub struct GroupedSettings {
+    pub groups: usize,
+}
+
+/// Settings for the Pronounceable style.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(default)]
+pub struct PronounceableSettings {
+    pub groups: usize,
+    pub include_number: bool,
+}
+
+/// Settings for the PIN style.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(default)]
+pub struct PinSettings {
+    pub length: usize,
 }
 
 /// Settings for character-based passwords.
@@ -56,11 +92,39 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             theme: Theme::Dark,
-            default_tab: Tab::Character,
+            default_style: Style::Segmented,
             words_file_path: PathBuf::new(),
             characters: CharacterSettings::default(),
+            segmented: SegmentedSettings::default(),
+            grouped: GroupedSettings::default(),
+            pronounceable: PronounceableSettings::default(),
+            pin: PinSettings::default(),
             words: WordSettings::default(),
         }
+    }
+}
+
+impl Default for SegmentedSettings {
+    fn default() -> Self {
+        Self { length: 16 }
+    }
+}
+
+impl Default for GroupedSettings {
+    fn default() -> Self {
+        Self { groups: 3 }
+    }
+}
+
+impl Default for PronounceableSettings {
+    fn default() -> Self {
+        Self { groups: 4, include_number: true }
+    }
+}
+
+impl Default for PinSettings {
+    fn default() -> Self {
+        Self { length: 6 }
     }
 }
 
@@ -120,6 +184,11 @@ impl Config {
         let mut messages = Vec::new();
         let mut config = match from_toml(&text) {
             Ok((config, ignored)) => {
+                if text.lines().any(|line| line.trim_start().starts_with("default_tab")) {
+                    if let Err(e) = config.save(path) {
+                        messages.push(e);
+                    }
+                }
                 if !ignored.is_empty() {
                     messages.push(format!("Ignored invalid settings in config.toml: {}", ignored.join(", ")));
                 }
@@ -158,6 +227,13 @@ impl Config {
     /// Brings values a hand-edited file might have out of range back into range.
     fn normalize(&mut self) {
         self.characters.length = self.characters.length.clamp(MIN_LENGTH, MAX_LENGTH);
+        self.segmented.length = self.segmented.length.clamp(MIN_LENGTH, MAX_LENGTH);
+        self.grouped.groups = self.grouped.groups.clamp(*GROUPS_RANGE.start(), *GROUPS_RANGE.end());
+        self.pronounceable.groups = self
+            .pronounceable
+            .groups
+            .clamp(*PRONOUNCEABLE_GROUPS_RANGE.start(), *PRONOUNCEABLE_GROUPS_RANGE.end());
+        self.pin.length = self.pin.length.clamp(*PIN_LENGTH_RANGE.start(), *PIN_LENGTH_RANGE.end());
         self.words.count = self.words.count.clamp(MIN_WORDS, MAX_WORDS);
         self.words.separator = self.words.separator.chars().take(1).collect();
     }
@@ -166,7 +242,13 @@ impl Config {
 /// Reads TOML leniently: every valid entry is used, while invalid values and unknown keys
 /// keep their defaults and are returned by name. Fails only if the text isn't TOML at all.
 fn from_toml(text: &str) -> Result<(Config, Vec<String>), toml::de::Error> {
-    let file: toml::Table = toml::from_str(text)?;
+    let mut file: toml::Table = toml::from_str(text)?;
+    // The previous version had two tabs instead of styles.
+    if let Some(toml::Value::String(tab)) = file.remove("default_tab") {
+        if let (false, Ok(style)) = (file.contains_key("default_style"), tab.parse::<Style>()) {
+            file.insert("default_style".to_string(), toml::Value::try_from(style).expect("a style is a string"));
+        }
+    }
     let mut merged = default_table();
     let mut ignored = Vec::new();
 
@@ -242,7 +324,7 @@ fn from_legacy(text: &str, old_default_words_path: &Path) -> Config {
 
     let mut config = Config::default();
     set(&values, "theme", &mut config.theme);
-    set(&values, "default_tab", &mut config.default_tab);
+    set(&values, "default_tab", &mut config.default_style);
     set(&values, "words_file_path", &mut config.words_file_path);
     if config.words_file_path == old_default_words_path {
         config.words_file_path = PathBuf::new();
@@ -282,10 +364,14 @@ mod tests {
 
     #[test]
     fn round_trips_through_toml() {
-        let mut config = Config::default();
-        config.theme = Theme::Light;
-        config.characters.special = "\"\\'#=[]".to_string();
-        config.words.count = 6;
+        let config = Config {
+            theme: Theme::Light,
+            default_style: Style::Pronounceable,
+            characters: CharacterSettings { special: "\"\\'#=[]".to_string(), ..Default::default() },
+            pin: PinSettings { length: 9 },
+            words: WordSettings { count: 6, ..Default::default() },
+            ..Default::default()
+        };
         let text = toml::to_string_pretty(&config).unwrap();
         assert_eq!(from_toml(&text).unwrap(), (config, vec![]));
     }
@@ -297,6 +383,9 @@ mod tests {
             colour = 1
             default_tab = "Word"
 
+            [pin]
+            length = 99
+
             [characters]
             length = "long"
             use_special = false
@@ -306,7 +395,8 @@ mod tests {
         "#;
         let (config, ignored) = from_toml(text).unwrap();
         assert_eq!(config.theme, Config::default().theme);
-        assert_eq!(config.default_tab, Tab::Word);
+        assert_eq!(config.default_style, Style::Words, "the old default_tab is migrated");
+        assert_eq!(config.pin.length, 99, "only normalize() clamps; from_toml keeps valid numbers");
         assert_eq!(config.characters.length, CharacterSettings::default().length);
         assert!(!config.characters.use_special);
         assert_eq!(config.words.count, 6);
@@ -325,7 +415,7 @@ mod tests {
         let config = from_legacy(text, old_words);
         assert_eq!(config.theme, Theme::Light);
         assert_eq!(config.words_file_path, PathBuf::new());
-        assert_eq!(config.default_tab, Tab::Character);
+        assert_eq!(config.default_style, Style::Segmented);
         assert!(!config.characters.use_special);
         assert_eq!(config.characters.length, 20);
         assert_eq!(config.characters.special, "!@#=");
