@@ -22,6 +22,8 @@ const MIN_WINDOW_WIDTH: f32 = 480.0;
 const SIZE_BOX_WIDTH: f32 = 40.0;
 const COPY_BUTTON_SIZE: egui::Vec2 = egui::vec2(26.0, 22.0);
 const OUTPUT_FONT_SIZE: f32 = 20.0;
+/// History rows shown before the list scrolls.
+const VISIBLE_HISTORY_ROWS: usize = 5;
 /// The tallest the spelled-out password gets before it scrolls.
 const SPELLING_MAX_HEIGHT: f32 = 72.0;
 const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(120);
@@ -29,6 +31,9 @@ const COPIED_FLASH_DURATION: Duration = Duration::from_millis(1500);
 /// After copying, the copied text is highlighted like a selection for this long, then fades out.
 const HIGHLIGHT_HOLD: Duration = Duration::from_millis(300);
 const HIGHLIGHT_FADE: Duration = Duration::from_millis(300);
+/// A password generated because an option changed goes into the history once it has been on
+/// screen this long, so dragging a slider doesn't fill the history with every step.
+const RECORD_AFTER: Duration = Duration::from_secs(1);
 
 impl eframe::App for PassGenApp {
     /// Called each frame to draw the GUI.
@@ -36,6 +41,11 @@ impl eframe::App for PassGenApp {
         let ctx = ui.ctx().clone();
 
         ctx.set_visuals(self.theme().visuals);
+
+        if !self.started {
+            self.started = true;
+            self.generate_and_copy(&ctx);
+        }
 
         // Handled before any widget so Space doesn't also press a focused button.
         self.handle_shortcuts(&ctx);
@@ -51,6 +61,7 @@ impl eframe::App for PassGenApp {
         let content_bottom = egui::CentralPanel::default()
             .show(ui, |ui| {
                 // --- Style Selection ---
+                let previous_style = self.active_style;
                 ui.horizontal(|ui| {
                     for style in Style::ALL {
                         ui.selectable_value(&mut self.active_style, style, style.label());
@@ -62,9 +73,12 @@ impl eframe::App for PassGenApp {
                         }
                     });
                 });
+                if self.active_style != previous_style {
+                    self.generate_and_copy(ui.ctx());
+                }
                 ui.separator();
 
-                // --- Options, Generate button and output for the active style ---
+                // --- Options and output for the active style ---
                 self.draw_style(ui);
 
                 // --- History, directly under the generated password ---
@@ -82,7 +96,7 @@ impl eframe::App for PassGenApp {
         // Settings are saved as soon as they change, so there is nothing to confirm on exit.
         if self.config != self.saved_config {
             if affects_passwords(&self.saved_config, &self.config) {
-                self.regenerate_all();
+                self.regenerate_shown();
             }
             if let Err(e) = self.config.save(&self.config_path) {
                 self.status_message = e;
@@ -90,6 +104,7 @@ impl eframe::App for PassGenApp {
             self.saved_config = self.config.clone(); // Don't retry a failed save every frame
             self.generate_error = None; // It may no longer apply to the new settings
         }
+        self.record_when_settled(&ctx);
         self.clear_clipboard_when_due(&ctx);
     }
 }
@@ -285,47 +300,52 @@ impl PassGenApp {
         let success = theme.success;
         let colors = PasswordColors::of(ui, &theme);
         let row_height = COPY_BUTTON_SIZE.y.max(ui.spacing().interact_size.y);
-        for entry in &self.history.entries {
-            let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), row_height), egui::Sense::hover());
-            let mut row_ui = ui.new_child(
-                egui::UiBuilder::new()
-                    .max_rect(row)
-                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
-            );
-            // Stop the text (and its text-selection hover area) where the button's
-            // furthest position begins, so hovering the button shows a normal cursor.
-            let mut text_area = row;
-            text_area.max.x -= COPY_BUTTON_SIZE.x;
-            row_ui.set_clip_rect(text_area.intersect(ui.clip_rect()));
+        // About 5 rows are visible; the rest of the history scrolls, so the window stays compact.
+        let spacing = ui.spacing().item_spacing.y;
+        let max_height = VISIBLE_HISTORY_ROWS as f32 * (row_height + spacing) - spacing;
+        egui::ScrollArea::vertical().max_height(max_height).auto_shrink([false, true]).show(ui, |ui| {
+            for entry in &self.history.entries {
+                let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), row_height), egui::Sense::hover());
+                let mut row_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(row)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                // Stop the text (and its text-selection hover area) where the button's
+                // furthest position begins, so hovering the button shows a normal cursor.
+                let mut text_area = row;
+                text_area.max.x -= COPY_BUTTON_SIZE.x;
+                row_ui.set_clip_rect(text_area.intersect(ui.clip_rect()));
 
-            row_ui.label(egui::RichText::new(&entry.created).monospace().weak());
-            row_ui.add_space(PADDING);
-            let shown = if self.show_history {
-                entry.password.clone()
-            } else {
-                "•".repeat(entry.password.chars().count().min(24))
-            };
-            let font = egui::TextStyle::Monospace.resolve(ui.style());
-            let label = egui::Label::new(colored_password(&shown, font.clone(), colors)).extend();
-            let password_rect = row_ui.add(label).rect;
-            if let Some(strength) = self.highlight_strength(ui.ctx(), &entry.password) {
-                paint_highlight(&row_ui, password_rect, text_area, strength, |painter, color| {
-                    painter.text(password_rect.left_center(), egui::Align2::LEFT_CENTER, &shown, font, color);
-                });
-            }
+                row_ui.label(egui::RichText::new(&entry.created).monospace().weak());
+                row_ui.add_space(PADDING);
+                let shown = if self.show_history {
+                    entry.password.clone()
+                } else {
+                    "•".repeat(entry.password.chars().count().min(24))
+                };
+                let font = egui::TextStyle::Monospace.resolve(ui.style());
+                let label = egui::Label::new(colored_password(&shown, font.clone(), colors)).extend();
+                let password_rect = row_ui.add(label).rect;
+                if let Some(strength) = self.highlight_strength(ui.ctx(), &entry.password) {
+                    paint_highlight(&row_ui, password_rect, text_area, strength, |painter, color| {
+                        painter.text(password_rect.left_center(), egui::Align2::LEFT_CENTER, &shown, font, color);
+                    });
+                }
 
-            // Sit right after the password, but never past the edge of the row:
-            // a long password slides underneath the button instead.
-            let button_x = (password_rect.right() + PADDING).min(row.right() - COPY_BUTTON_SIZE.x);
-            let button_rect = egui::Rect::from_min_size(
-                egui::pos2(button_x, row.center().y - COPY_BUTTON_SIZE.y / 2.0),
-                COPY_BUTTON_SIZE,
-            );
-            let just_copied = self.was_just_copied(ui.ctx(), &entry.password);
-            if ui.put(button_rect, copy_button(just_copied, success)).clicked() {
-                copied = Some(entry.password.clone());
+                // Sit right after the password, but never past the edge of the row:
+                // a long password slides underneath the button instead.
+                let button_x = (password_rect.right() + PADDING).min(row.right() - COPY_BUTTON_SIZE.x);
+                let button_rect = egui::Rect::from_min_size(
+                    egui::pos2(button_x, row.center().y - COPY_BUTTON_SIZE.y / 2.0),
+                    COPY_BUTTON_SIZE,
+                );
+                let just_copied = self.was_just_copied(ui.ctx(), &entry.password);
+                if ui.put(button_rect, copy_button(just_copied, success)).clicked() {
+                    copied = Some(entry.password.clone());
+                }
             }
-        }
+        });
         if let Some(password) = copied {
             self.copy_to_clipboard(ui.ctx(), password);
         }
@@ -468,20 +488,35 @@ impl PassGenApp {
         };
     }
 
-    /// Generates a password for every style so one is ready as soon as the window opens.
-    /// Errors are ignored here; each style explains unusable settings itself.
-    fn generate_on_startup(&mut self) {
-        for style in Style::ALL {
-            let _ = self.generate(style);
-        }
+    /// Generates a new password for the active style after an option changed, without copying
+    /// it. It goes into the history once it has stayed on screen for `RECORD_AFTER`. If the
+    /// settings can't work, the field is left empty and the reason is shown under it.
+    fn regenerate_shown(&mut self) {
+        let style = self.active_style;
+        self.unrecorded = match self.generate(style) {
+            Ok(()) => self.outputs.get(&style).map(|password| (Instant::now(), password.clone())),
+            Err(_) => {
+                self.outputs.remove(&style);
+                None
+            }
+        };
     }
 
-    /// Generates a new password for every style, without copying them. A style whose settings
-    /// can't work is left empty, and explains why when selected.
-    fn regenerate_all(&mut self) {
-        for style in Style::ALL {
-            if self.generate(style).is_err() {
-                self.outputs.remove(&style);
+    /// Records the password from the last option change in the history once it has been on
+    /// screen long enough, or right away when the window is closing.
+    fn record_when_settled(&mut self, ctx: &egui::Context) {
+        let Some((shown_at, _)) = &self.unrecorded else {
+            return;
+        };
+        let closing = ctx.input(|i| i.viewport().close_requested());
+        let elapsed = shown_at.elapsed();
+        if elapsed < RECORD_AFTER && !closing {
+            ctx.request_repaint_after(RECORD_AFTER - elapsed);
+            return;
+        }
+        if let Some((_, password)) = self.unrecorded.take() {
+            if let Err(e) = self.history.add(&password) {
+                self.status_message = format!("Saving history failed: {}", e);
             }
         }
     }
@@ -493,8 +528,8 @@ impl PassGenApp {
         Ok(())
     }
 
-    /// Switches to the wordlist at `path` (empty for the built-in list) and
-    /// generates a fresh passphrase from it.
+    /// Switches to the wordlist at `path` (empty for the built-in list). The settings change
+    /// then generates a fresh passphrase if the Words style is shown.
     fn set_wordlist(&mut self, path: PathBuf) {
         self.words_file_path_str = path.to_string_lossy().to_string();
         self.config.words_file_path = path;
@@ -502,15 +537,13 @@ impl PassGenApp {
         self.words = words;
         self.status_message = status.clone();
         self.wordlist_status = status;
-        if self.generate(Style::Words).is_err() {
-            self.outputs.remove(&Style::Words); // The Words style explains why
-        }
     }
 
-    /// Generates a new password in the active style and copies it.
+    /// Generates a new password in the active style, copies it and records it in the history.
     fn generate_and_copy(&mut self, ctx: &egui::Context) {
         match self.generate(self.active_style) {
             Ok(()) => {
+                self.unrecorded = None; // Replaced before it had been on screen long enough
                 self.generate_error = None;
                 self.copy_output(ctx);
             }
@@ -523,6 +556,9 @@ impl PassGenApp {
         let Some(password) = self.outputs.get(&self.active_style).cloned() else {
             return;
         };
+        if self.unrecorded.as_ref().is_some_and(|(_, unrecorded)| *unrecorded == password) {
+            self.unrecorded = None; // Recorded now, by copying
+        }
         let history_result = self.history.add(&password);
         self.copy_to_clipboard(ctx, password);
         if let Err(e) = history_result {
@@ -829,11 +865,7 @@ pub fn run_gui_mode() {
     eframe::run_native(
         "Password generator",
         options,
-        Box::new(|_cc| {
-            let mut app = PassGenApp::new();
-            app.generate_on_startup();
-            Ok(Box::new(app))
-        }),
+        Box::new(|_cc| Ok(Box::new(PassGenApp::new()))),
     )
     .expect("Failed to run eframe");
 }
@@ -860,6 +892,56 @@ mod tests {
         let mut no_symbols = old.clone();
         no_symbols.characters.use_special = false;
         assert!(affects_passwords(&old, &no_symbols));
+    }
+
+    /// An app with default settings and an in-memory history, as the tests below need.
+    fn test_app() -> PassGenApp {
+        PassGenApp { active_style: Style::Random, ..PassGenApp::default() }
+    }
+
+    fn history(app: &PassGenApp) -> Vec<String> {
+        app.history.entries.iter().map(|entry| entry.password.clone()).collect()
+    }
+
+    #[test]
+    fn generating_with_the_button_copies_and_records() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        app.generate_and_copy(&ctx);
+        let shown = app.outputs[&Style::Random].clone();
+        assert_eq!(history(&app), std::slice::from_ref(&shown));
+        assert_eq!(app.clipboard_clear_at.as_ref().map(|(_, text)| text), Some(&shown));
+    }
+
+    #[test]
+    fn option_changes_are_recorded_once_they_settle() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+
+        // Dragging a slider: each step replaces the last before it settles.
+        for _ in 0..10 {
+            app.regenerate_shown();
+            app.record_when_settled(&ctx);
+        }
+        assert!(history(&app).is_empty(), "nothing has been on screen for long enough yet");
+
+        // The password the drag stopped on is recorded after RECORD_AFTER.
+        let settled = app.outputs[&Style::Random].clone();
+        app.unrecorded.as_mut().unwrap().0 -= RECORD_AFTER;
+        app.record_when_settled(&ctx);
+        assert_eq!(history(&app), [settled]);
+        assert!(app.unrecorded.is_none());
+        assert!(app.clipboard_clear_at.is_none(), "option changes don't copy");
+    }
+
+    #[test]
+    fn copying_records_an_unsettled_password_once() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        app.regenerate_shown();
+        app.copy_output(&ctx);
+        assert_eq!(history(&app).len(), 1);
+        assert!(app.unrecorded.is_none(), "no second entry when it settles");
     }
 
     #[test]

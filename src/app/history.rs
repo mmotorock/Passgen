@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 /// How many generated passwords are remembered.
-pub const MAX_ENTRIES: usize = 5;
+pub const MAX_ENTRIES: usize = 10;
 
 const KEYRING_SERVICE: &str = "passgen";
 const KEYRING_USER: &str = "history-key";

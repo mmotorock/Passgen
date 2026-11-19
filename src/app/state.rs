@@ -180,6 +180,8 @@ pub struct PassGenApp {
     pub generate_error: Option<String>, // Why the last generation failed, shown under the button
     pub clipboard_clear_at: Option<(Instant, String)>, // When to clear the clipboard, and what we copied
     pub copied_flash: Option<(Instant, String)>, // When something was copied, for the ✓ on its button
+    pub started: bool, // Whether the first password has been generated and copied
+    pub unrecorded: Option<(Instant, String)>, // A password shown after an option change, not in the history yet
 
     // Settings, and the version last written to config.toml
     pub config: Config,
@@ -210,6 +212,8 @@ impl Default for PassGenApp {
             generate_error: None,
             clipboard_clear_at: None,
             copied_flash: None,
+            started: false,
+            unrecorded: None,
             config: Config::default(),
             saved_config: Config::default(),
             themes: Vec::new(),
