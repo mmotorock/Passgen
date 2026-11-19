@@ -235,7 +235,7 @@ Without `-s`, Passgen uses your default style if it fits the size option, and ot
 
 | Option | Description |
 |---|---|
-| `-s`, `--style <STYLE>` | `random`, `segmented`, `grouped`, `pronounceable`, `pin` or `words` |
+| `-s`, `--style <STYLE>` | `random`, `segmented`, `grouped`, `pronounceable`, `pin` or `words`, or the style's number `1`–`6` (the same numbers as the [GUI shortcuts](#keyboard-shortcuts)) |
 | `-n`, `--length <LENGTH>` | Length: 12 to 256 for random and segmented, 4 to 12 for pin |
 | `-g`, `--groups <COUNT>` | Number of groups: 2 to 5 for grouped, 3 to 8 for pronounceable |
 | `-w`, `--words <COUNT>` | Number of words (3 to 8); on its own it also selects the words style |
@@ -266,6 +266,7 @@ passgen -s segmented -n 20             # e.g. qwe7ADF4zxv2HJL&mnb9
 passgen -s grouped                     # e.g. hupvew-7hiTwa-qasnob
 passgen -s pronounceable -g 5          # e.g. Kavo-temi-Rupa48-zeku-Bafi
 passgen -s pin -n 6                    # e.g. 583061
+passgen -s 5 -n 6                      # the same, with the style's number
 passgen -w 4 --number                  # e.g. Mango-42-Otter-Kettle-Robin
 passgen -w 4 --no-separator --no-capitalize   # e.g. mangootterkettlerobin
 passgen -n 16 -c 10 --no-copy          # print ten passwords, don't touch the clipboard

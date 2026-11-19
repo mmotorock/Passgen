@@ -238,6 +238,17 @@ mod tests {
     }
 
     #[test]
+    fn styles_can_be_given_by_number() {
+        for (position, style) in Style::ALL.into_iter().enumerate() {
+            let number = (position + 1).to_string();
+            assert_eq!(parse(&format!("-s {}", number)).style, Some(style), "-s {}", number);
+            assert_eq!(parse(&format!("-s {}", cli_name(style))).style, Some(style));
+        }
+        assert!(CliArgs::try_parse_from(["passgen", "-s", "7"]).is_err());
+        assert!(CliArgs::try_parse_from(["passgen", "-s", "0"]).is_err());
+    }
+
+    #[test]
     fn applies_the_size_to_the_chosen_style() {
         let (_, config) = run_settings("-s pin -n 8", Config::default()).unwrap();
         assert_eq!(config.pin.length, 8);

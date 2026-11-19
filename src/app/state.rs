@@ -10,19 +10,27 @@ use std::str::FromStr;
 use std::time::Instant;
 
 /// The kinds of password Passgen can generate. Each has its own options in the GUI.
+/// On the command line a style can also be given by its number, the same as the GUI's
+/// keyboard shortcut (`-s 2` for segmented).
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, Serialize, Deserialize, clap::ValueEnum)]
 pub enum Style {
     /// Every character picked at random from the selected sets
+    #[value(alias = "1")]
     Random,
     /// Same-case groups of 3 letters, each closed by a number or symbol
+    #[value(alias = "2")]
     Segmented,
     /// Dash-separated blocks of 6 lowercase letters with one capital and one digit
+    #[value(alias = "3")]
     Grouped,
     /// Made-up words of easy syllables
+    #[value(alias = "4")]
     Pronounceable,
     /// Digits only
+    #[value(alias = "5")]
     Pin,
     /// Common words (a passphrase)
+    #[value(alias = "6")]
     Words,
 }
 
@@ -94,24 +102,25 @@ impl FromStr for Style {
     long_about = "Generates strong, random passwords, PINs or memorable passphrases.\n\n\
                   Run without arguments to launch the GUI. With a style or a size option it works on the command \
                   line instead, using the settings saved by the GUI; the options below override them for one run.",
-    after_help = "Styles:\n  \
-                  random         every character random:           q7@Mdf#2kTae!9xH   (-n 12..256)\n  \
-                  segmented      same-case groups of 3 letters:    asd2qwe+YUI6xcv4   (-n 12..256)\n  \
-                  grouped        Apple-style blocks of 6:          hupvew-7hiTwa-qasnob (-g 2..5)\n  \
-                  pronounceable  made-up words of syllables:       Kavo-temi48-Rupa-zeku (-g 3..8)\n  \
-                  pin            digits only:                      583061             (-n 4..12)\n  \
-                  words          a passphrase of common words:     Mango-Otter-Kettle-Robin (-w 3..8)\n\n\
+    after_help = "Styles (by name or number, e.g. -s segmented or -s 2):\n  \
+                  1  random         every character random:         q7@Mdf#2kTae!9xH         (-n 12..256)\n  \
+                  2  segmented      same-case groups of 3 letters:  asd2qwe+YUI6xcv4         (-n 12..256)\n  \
+                  3  grouped        Apple-style blocks of 6:        hupvew-7hiTwa-qasnob     (-g 2..5)\n  \
+                  4  pronounceable  made-up words of syllables:     Kavo-temi48-Rupa-zeku    (-g 3..8)\n  \
+                  5  pin            digits only:                    583061                   (-n 4..12)\n  \
+                  6  words          a passphrase of common words:   Mango-Otter-Kettle-Robin (-w 3..8)\n\n\
                   Examples:\n  \
                   passgen -n 16                     a 16-character password in your default style\n  \
                   passgen -s random -n 20 --no-special\n  \
                   passgen -s pin -n 6               a 6-digit PIN\n  \
+                  passgen -s 5 -n 6                 the same, by number\n  \
                   passgen -s grouped                Apple-style, with your saved number of groups\n  \
                   passgen -w 4 --number             e.g. Mango-42-Otter-Kettle-Robin\n  \
                   passgen -n 16 -c 10 --no-copy     print ten passwords, don't touch the clipboard"
 )]
 #[command(group(clap::ArgGroup::new("cli").multiple(true).args(["style", "length", "groups", "words"])))]
 pub struct CliArgs {
-    /// The style to generate (default: the default style from the settings)
+    /// The style to generate, by name or number (default: the default style from the settings)
     #[arg(short = 's', long, value_enum, value_name = "STYLE")]
     pub style: Option<Style>,
 
