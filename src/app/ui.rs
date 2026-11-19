@@ -2,7 +2,7 @@ use crate::app::config::{CharacterSettings, Config, PinSettings, SegmentedSettin
 use crate::app::history::MAX_ENTRIES;
 use crate::app::spelling::{spell_out, Kind};
 use crate::app::password::{MAX_LENGTH, MAX_WORDS, MIN_LENGTH, MIN_WORDS};
-use crate::app::state::{PassGenApp, Style};
+use crate::app::state::{PassGenApp, Style, StyleKey};
 use crate::app::styles::{self, GROUPS_RANGE, PIN_LENGTH_RANGE, PRONOUNCEABLE_GROUPS_RANGE};
 use crate::app::themes::{self, Theme};
 use crate::app::utils::get_config_directory;
@@ -36,6 +36,27 @@ const HIGHLIGHT_FADE: Duration = Duration::from_millis(300);
 const RECORD_AFTER: Duration = Duration::from_secs(1);
 
 impl eframe::App for PassGenApp {
+    /// Takes the style-switching keys out of the input before egui sees them, so egui doesn't
+    /// also use Tab and the arrow keys to move keyboard focus. While a text field is being
+    /// edited, or a dropdown is open, every key is left alone.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if ctx.text_edit_focused() || ctx.any_popup_open() {
+            return;
+        }
+        raw_input.events.retain(|event| {
+            let egui::Event::Key { key, pressed, modifiers, .. } = event else {
+                return true;
+            };
+            let Some(style_key) = style_key(*key, *modifiers) else {
+                return true;
+            };
+            if *pressed {
+                self.style_keys.push(style_key);
+            }
+            false
+        });
+    }
+
     /// Called each frame to draw the GUI.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -44,6 +65,11 @@ impl eframe::App for PassGenApp {
 
         if !self.started {
             self.started = true;
+            self.generate_and_copy(&ctx);
+        }
+        let keyed_style = self.style_keys.drain(..).fold(self.active_style, Style::after);
+        if keyed_style != self.active_style {
+            self.active_style = keyed_style;
             self.generate_and_copy(&ctx);
         }
 
@@ -644,6 +670,27 @@ impl PassGenApp {
     }
 }
 
+/// The style switch a key press means: Tab or → or l for the next style, Shift+Tab or ← or h
+/// for the previous one, 1-6 to jump to a style. Keys with Ctrl, Alt or Cmd are left alone.
+fn style_key(key: egui::Key, modifiers: egui::Modifiers) -> Option<StyleKey> {
+    use egui::Key;
+    if modifiers.ctrl || modifiers.alt || modifiers.command || modifiers.mac_cmd {
+        return None;
+    }
+    if key == Key::Tab {
+        return Some(if modifiers.shift { StyleKey::Previous } else { StyleKey::Next });
+    }
+    if modifiers.shift {
+        return None;
+    }
+    let digits = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6];
+    match key {
+        Key::ArrowRight | Key::L => Some(StyleKey::Next),
+        Key::ArrowLeft | Key::H => Some(StyleKey::Previous),
+        _ => digits.iter().position(|digit| *digit == key).map(StyleKey::Jump),
+    }
+}
+
 /// Whether a settings change can change the generated passwords (not just the theme, the default
 /// style or what's shown), so they should be generated again.
 fn affects_passwords(old: &Config, new: &Config) -> bool {
@@ -863,7 +910,7 @@ pub fn run_gui_mode() {
         ..Default::default()
     };
     eframe::run_native(
-        "Password generator",
+        "Passgen",
         options,
         Box::new(|_cc| Ok(Box::new(PassGenApp::new()))),
     )
@@ -873,6 +920,7 @@ pub fn run_gui_mode() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eframe::App;
 
     #[test]
     fn only_generation_settings_trigger_regeneration() {
@@ -942,6 +990,57 @@ mod tests {
         app.copy_output(&ctx);
         assert_eq!(history(&app).len(), 1);
         assert!(app.unrecorded.is_none(), "no second entry when it settles");
+    }
+
+    fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+    }
+
+    #[test]
+    fn maps_keys_to_style_switches() {
+        use egui::{Key, Modifiers};
+        assert_eq!(style_key(Key::Tab, Modifiers::NONE), Some(StyleKey::Next));
+        assert_eq!(style_key(Key::Tab, Modifiers::SHIFT), Some(StyleKey::Previous));
+        assert_eq!(style_key(Key::L, Modifiers::NONE), Some(StyleKey::Next));
+        assert_eq!(style_key(Key::ArrowLeft, Modifiers::NONE), Some(StyleKey::Previous));
+        assert_eq!(style_key(Key::Num3, Modifiers::NONE), Some(StyleKey::Jump(2)));
+        assert_eq!(style_key(Key::Num7, Modifiers::NONE), None);
+        assert_eq!(style_key(Key::H, Modifiers::SHIFT), None);
+        assert_eq!(style_key(Key::L, Modifiers::CTRL), None);
+        assert_eq!(style_key(Key::Space, Modifiers::NONE), None);
+    }
+
+    #[test]
+    fn switching_wraps_around_and_jumps() {
+        assert_eq!(Style::Random.after(StyleKey::Previous), Style::Words);
+        assert_eq!(Style::Words.after(StyleKey::Next), Style::Random);
+        assert_eq!(Style::Random.after(StyleKey::Jump(4)), Style::Pin);
+        for (position, style) in Style::ALL.into_iter().enumerate() {
+            assert_eq!(Style::Grouped.after(StyleKey::Jump(position)), style);
+        }
+    }
+
+    #[test]
+    fn takes_style_keys_only_when_not_typing() {
+        use egui::{Key, Modifiers};
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        let events = vec![key(Key::Tab, Modifiers::NONE), key(Key::A, Modifiers::NONE), key(Key::Num2, Modifiers::NONE)];
+
+        let mut input = egui::RawInput { events: events.clone(), ..Default::default() };
+        app.raw_input_hook(&ctx, &mut input);
+        assert_eq!(app.style_keys, [StyleKey::Next, StyleKey::Jump(1)]);
+        assert_eq!(input.events, [key(Key::A, Modifiers::NONE)], "other keys still reach egui");
+
+        // While a text field has focus, every key goes to it.
+        app.style_keys.clear();
+        let field = egui::Id::unique("a text field");
+        egui::text_edit::TextEditState::default().store(&ctx, field);
+        ctx.memory_mut(|memory| memory.request_focus(field));
+        let mut input = egui::RawInput { events: events.clone(), ..Default::default() };
+        app.raw_input_hook(&ctx, &mut input);
+        assert!(app.style_keys.is_empty());
+        assert_eq!(input.events, events);
     }
 
     #[test]

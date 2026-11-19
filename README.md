@@ -34,7 +34,7 @@ Passgen is a versatile, secure password and passphrase generator built with Rust
     -   A password is generated and copied as soon as the app opens and whenever you switch style. Changing an option shows a new one straight away (without copying it).
     -   Next to the password: **↻** generates a new one and copies it, **copy** copies the current one, and **🔊** spells it out. When something is copied, the button shows a check mark and the copied text flashes as if selected.
     -   The clipboard is cleared after 2 minutes (only if it still holds that password).
-    -   Keyboard shortcuts: `Space` generates a new password and copies it, `Ctrl+C` copies the one on screen.
+    -   Keyboard shortcuts for everything you do often, including switching styles (see [Keyboard Shortcuts](#keyboard-shortcuts)).
     -   Settings that can't produce a password (e.g. no character set selected) are explained right under the password.
 -   **Easy to Read Out:**
     -   Digits and symbols are shown in their own colours, so "capital, digit, symbol" is visible at a glance.
@@ -148,6 +148,31 @@ include_number = false
 ```
 
 Missing or invalid entries fall back to their defaults (and are reported in the status bar). Config files from earlier versions are converted automatically, keeping the original as `config.toml.bak`.
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|---|---|
+| `Space` | Generate a new password and copy it |
+| `Ctrl+C` | Copy the password on screen (or the text you've selected) |
+| `Tab` / `Shift+Tab` | Next / previous style |
+| `→` / `←`, or `l` / `h` (as in Vim) | Next / previous style |
+| `1` – `6` | Jump to a style |
+
+The style numbers follow the order of the buttons:
+
+| Key | Style |
+|---|---|
+| `1` | Random |
+| `2` | Segmented |
+| `3` | Grouped |
+| `4` | Pronounceable |
+| `5` | PIN |
+| `6` | Words |
+
+Switching style generates a new password in that style and copies it, just like clicking its button. Style switching wraps around: `→` on Words goes to Random.
+
+The shortcuts are off while you're typing in a text field (such as the character sets or the length box), so letters and numbers go into the field as usual; click outside it or press `Esc` to use them again. They're also off while a dropdown in the settings is open.
 
 ### Themes
 

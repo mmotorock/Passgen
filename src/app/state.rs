@@ -50,6 +50,30 @@ impl Style {
     }
 }
 
+/// A key press that switches the style: Tab/Shift+Tab, the arrow keys or h/l, or 1-6.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StyleKey {
+    Next,
+    Previous,
+    /// Jump to the style at this position (0 for the first).
+    Jump(usize),
+}
+
+impl Style {
+    /// The style that `key` switches to from this one. Next and Previous wrap around.
+    pub fn after(self, key: StyleKey) -> Style {
+        let count = Style::ALL.len();
+        let index = Style::ALL.iter().position(|style| *style == self).unwrap_or(0);
+        let target = match key {
+            StyleKey::Next => (index + 1) % count,
+            StyleKey::Previous => (index + count - 1) % count,
+            StyleKey::Jump(position) if position < count => position,
+            StyleKey::Jump(_) => index,
+        };
+        Style::ALL[target]
+    }
+}
+
 impl FromStr for Style {
     type Err = ();
     /// Also accepts the tab names used by earlier versions ("Character" and "Word").
@@ -181,6 +205,7 @@ pub struct PassGenApp {
     pub clipboard_clear_at: Option<(Instant, String)>, // When to clear the clipboard, and what we copied
     pub copied_flash: Option<(Instant, String)>, // When something was copied, for the ✓ on its button
     pub started: bool, // Whether the first password has been generated and copied
+    pub style_keys: Vec<StyleKey>, // Style-switching keys pressed since the last frame
     pub unrecorded: Option<(Instant, String)>, // A password shown after an option change, not in the history yet
 
     // Settings, and the version last written to config.toml
@@ -213,6 +238,7 @@ impl Default for PassGenApp {
             clipboard_clear_at: None,
             copied_flash: None,
             started: false,
+            style_keys: Vec::new(),
             unrecorded: None,
             config: Config::default(),
             saved_config: Config::default(),
